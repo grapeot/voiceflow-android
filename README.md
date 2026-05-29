@@ -36,6 +36,12 @@ Concretely that means:
 > `skills/adding_voice_input_with_voiceflowkit_android.md` end-to-end before
 > touching the kit.
 
+This is not a toy. VoiceFlowKit is not just demoed by the small reference app in
+this repo — it backs voice input in a real, separately-maintained product: the
+**OpenCode Android Client** ([grapeot/opencode_android_client](https://github.com/grapeot/opencode_android_client))
+consumes this library (via JitPack) to put live transcription on its chat
+composer. The kit is sized and shaped by that real consumer, not by the demo.
+
 ## VoiceFlowKit (the library)
 
 ### Identity
