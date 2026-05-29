@@ -1,3 +1,20 @@
+// Load a root .env for opt-in live integration test credentials (never checked in).
+// Mirrors the opencode_android_client pattern: read OPENCODE_* and push them into
+// testInstrumentationRunnerArguments so the instrumented test can read them at
+// runtime. When .env is absent, the args are empty and the live test self-skips
+// (assumeTrue), keeping the default test run green and offline.
+val envFile = rootProject.file(".env")
+val env: Map<String, String> = if (envFile.exists()) {
+    envFile.readLines()
+        .filter { it.isNotBlank() && !it.startsWith("#") }
+        .mapNotNull { line ->
+            val idx = line.indexOf('=')
+            if (idx <= 0) null
+            else line.substring(0, idx).trim() to line.substring(idx + 1).trim().removeSurrounding("\"")
+        }
+        .toMap()
+} else emptyMap()
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -13,6 +30,13 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // Opt-in live e2e credentials from root .env (never committed). Empty when
+        // .env is absent -> the live test self-skips via assumeTrue.
+        testInstrumentationRunnerArguments["OPENCODE_BASE_URL"] = env["OPENCODE_BASE_URL"] ?: ""
+        testInstrumentationRunnerArguments["OPENCODE_USERNAME"] = env["OPENCODE_USERNAME"] ?: ""
+        testInstrumentationRunnerArguments["OPENCODE_PASSWORD"] = env["OPENCODE_PASSWORD"] ?: ""
     }
 
     compileOptions {
@@ -64,4 +88,9 @@ dependencies {
     implementation(libs.okhttp)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
+
+    androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.espresso.core)
+    androidTestImplementation(libs.kotlinx.coroutines.android)
 }

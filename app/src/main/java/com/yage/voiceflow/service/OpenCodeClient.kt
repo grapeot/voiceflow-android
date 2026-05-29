@@ -3,6 +3,7 @@ package com.yage.voiceflow.service
 import android.net.Uri
 import android.util.Base64
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.Callback
@@ -58,6 +59,12 @@ class OpenCodeClient(
             val base = validatedBaseURL(serverURL)
             val sessionId = createSession(base, username, password)
             sendPrompt(base, sessionId, text, username, password)
+            // A 204 from prompt_async is not proof the job landed: a bad agent
+            // still returns 2xx while the message silently never persists. Mirror
+            // the iOS client (verifyPersistedUserMessageInBackground /
+            // sessionContainsUserMessage): poll GET /session/{id}/message until a
+            // [user] message with the sent text appears, otherwise fail loudly.
+            verifyPersistedUserMessage(base, sessionId, text, username, password)
         }
 
     private suspend fun createSession(base: String, username: String, password: String): String {
@@ -129,6 +136,89 @@ class OpenCodeClient(
         }
     }
 
+    /**
+     * Read-back verification (port of iOS `verifyPersistedUserMessageInBackground`).
+     * Polls GET `{base}/session/{id}/message` up to [maxAttempts] times, ~[delayMillis]
+     * apart, looking for a message whose `info.role == "user"` and whose joined
+     * `parts[].text` equals [text]. Throws [OpenCodeClientError.PromptSendFailed]
+     * if it never appears (i.e. the 204 lied about the job landing).
+     *
+     * Unlike iOS, which runs this fire-and-forget in a background Task, the public
+     * client awaits it inline so the caller's `sendTranscript` only resolves once
+     * the message is actually persisted — keeping the public API shape (a suspend
+     * fun that returns on success / throws on failure).
+     */
+    private suspend fun verifyPersistedUserMessage(
+        base: String,
+        sessionId: String,
+        text: String,
+        username: String,
+        password: String,
+        maxAttempts: Int = 10,
+        delayMillis: Long = 500,
+    ) {
+        for (attempt in 0 until maxAttempts) {
+            if (sessionContainsUserMessage(base, sessionId, text, username, password)) {
+                return
+            }
+            if (attempt < maxAttempts - 1) {
+                delay(delayMillis)
+            }
+        }
+        throw OpenCodeClientError.PromptSendFailed
+    }
+
+    private suspend fun sessionContainsUserMessage(
+        base: String,
+        sessionId: String,
+        text: String,
+        username: String,
+        password: String,
+    ): Boolean {
+        val request = Request.Builder()
+            .url("$base/session/${Uri.encode(sessionId)}/message")
+            .get()
+            .header("Authorization", authHeaderValue(username, password))
+            .build()
+
+        return execute(request, timeoutSeconds = 10).use { response ->
+            if (response.code != 200) return false
+            val raw = response.body?.string().orEmpty()
+            val messages = try {
+                JSONArray(raw)
+            } catch (_: Throwable) {
+                return false
+            }
+            for (i in 0 until messages.length()) {
+                val item = messages.optJSONObject(i) ?: continue
+                val role = item.optJSONObject("info")?.optString("role")
+                if (role != "user") continue
+                if (messageText(item) == text) return true
+            }
+            false
+        }
+    }
+
+    /** Join the textual `parts[].text` (falling back to `content`) of a message. */
+    private fun messageText(item: JSONObject): String? {
+        val parts = item.optJSONArray("parts") ?: return null
+        val builder = StringBuilder()
+        var found = false
+        for (i in 0 until parts.length()) {
+            val part = parts.optJSONObject(i) ?: continue
+            val text = when {
+                part.has("text") -> part.optString("text")
+                part.has("content") -> part.optString("content")
+                else -> null
+            }
+            if (text != null) {
+                builder.append(text)
+                found = true
+            }
+        }
+        return if (found) builder.toString() else null
+    }
+
     internal fun authHeaderValue(username: String, password: String): String {
         val credentials = "$username:$password"
         val encoded = Base64.encodeToString(credentials.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
@@ -195,7 +285,11 @@ class OpenCodeClient(
         const val DEFAULT_USERNAME = "opencode"
         const val MODEL_ID = "gpt-5.5"
         const val PROVIDER_ID = "openai"
-        const val AGENT = "Sisyphus - Ultraworker"
+        // Must match an agent the OpenCode server actually exposes (GET /agent):
+        // build, plan, explore, general, ... "build" is the default coding agent.
+        // The previous "Sisyphus - Ultraworker" does not exist on the server, so
+        // prompt_async returned 2xx but the job silently never ran.
+        const val AGENT = "build"
 
         private val JSON_MEDIA_TYPE = "application/json".toMediaType()
 
@@ -203,7 +297,11 @@ class OpenCodeClient(
         fun allowsInsecureHttp(host: String): Boolean = isLoopbackHost(host) || isTailscaleHost(host)
 
         private fun isLoopbackHost(host: String): Boolean =
-            host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+            host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]" ||
+                // 10.0.2.2 is the Android emulator's alias for the host machine's
+                // loopback — same loopback trust as localhost, used to reach a
+                // server running on the developer's machine from the emulator.
+                host == "10.0.2.2"
 
         private fun isTailscaleHost(host: String): Boolean = host.endsWith(".ts.net")
 
