@@ -1,0 +1,37 @@
+# Android / Gradle
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build/
+*/build/
+/captures
+.externalNativeBuild
+.cxx
+.kotlin/
+
+# Kotlin
+*.class
+*.kt.swp
+
+# Keep the Gradle wrapper jar (binary, must be committed)
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+
+# Keystore / secrets (never commit)
+*.jks
+*.keystore
+secrets.properties
+.env
+
+# IDE
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+
+# Logs
+*.log

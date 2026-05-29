@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose-only app: no AppCompat needed. A NoActionBar platform theme
+         is the minimal choice with zero extra dependencies. The actual
+         colors/typography come from the Compose MaterialTheme (Theme.kt). -->
+    <style name="Theme.VoiceFlow" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

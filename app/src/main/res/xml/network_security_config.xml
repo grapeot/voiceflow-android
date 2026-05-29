@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Mirrors the iOS allowsInsecureHTTP policy: cleartext HTTP is permitted
+    ONLY for loopback (localhost / 127.0.0.1 / ::1) and the *.ts.net
+    Tailscale domain. Everything else must use HTTPS. We deliberately do NOT
+    set android:usesCleartextTraffic="true" in the manifest, so the scope
+    stays restricted to these domains.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">::1</domain>
+        <domain includeSubdomains="true">ts.net</domain>
+    </domain-config>
+</network-security-config>

@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Simplified Chinese string set, ported value-for-value from the iOS
+    zh-Hans.lproj/Localizable.strings. Resource names match values/strings.xml.
+    iOS %@ -> %1$s, %d kept. The two record_save_* strings are Android-adapted
+    (Files-app path wording replaced with the on-device app storage wording),
+    matching the English adaptation.
+-->
+<resources>
+    <string name="app_name">VoiceFlow</string>
+    <string name="permission_microphone_rationale">VoiceFlow 使用麦克风录制音频并进行转写。</string>
+
+    <string name="tab_record">录音</string>
+    <string name="tab_settings">设置</string>
+
+    <string name="record_transcript_title">转写文本</string>
+    <string name="record_transcript_placeholder">开始说话。</string>
+    <string name="record_transcript_characterCount">%d 字</string>
+    <string name="record_controls_title">控制</string>
+    <string name="record_start">录音</string>
+    <string name="record_stop">停止</string>
+    <string name="record_copy">复制</string>
+    <string name="record_history">历史</string>
+    <string name="record_saveRecording">保存录音</string>
+    <string name="record_resendRecording">重发录音</string>
+    <string name="record_save_confirmation_title">录音已保存</string>
+    <string name="record_save_confirmation_message">已保存为 %1$s。\n\n已保存的录音存放在 VoiceFlow 的应用存储中。可使用文件管理器，或将设备连接到电脑后访问应用的「文件」目录查看。</string>
+    <string name="record_save_statusLine">已保存 %1$s 到 VoiceFlow 存储。</string>
+    <string name="record_save_failed">无法保存录音。</string>
+    <string name="record_sendToOpenCode">发送到 OpenCode</string>
+    <string name="record_openCode_optional">OpenCode 是可选配置；发送时会把当前转写文本传到你配置的服务器。</string>
+    <string name="record_openCode_info_accessibility">关于 OpenCode</string>
+
+    <string name="record_status_idle">就绪</string>
+    <string name="record_status_requestingPermission">正在请求麦克风权限…</string>
+    <string name="record_status_recording">聆听中</string>
+    <string name="record_status_transcribing">转写中</string>
+    <string name="record_status_ready">转写完成</string>
+    <string name="record_status_reconnecting">重新连接中…</string>
+    <string name="record_status_reconnected">连接已恢复。</string>
+
+    <string name="record_error_missingToken">录音前请先保存 AI Builder token。</string>
+    <string name="record_error_microphoneDenied">麦克风权限未开启。请到系统设置中打开后再录音。</string>
+    <string name="record_error_recordingFailed">录音失败，请重试。</string>
+    <string name="record_error_transcriptionFailed">转写失败。你的 token 和录音内容不会写入日志。</string>
+    <string name="record_error_streamDisconnected">流已断开。</string>
+    <string name="record_error_alert_title">录音出错</string>
+    <string name="record_error_alert_ok">好</string>
+
+    <string name="record_clipboard_copied">已复制到剪贴板。</string>
+    <string name="record_clipboard_failed">无法复制到剪贴板。</string>
+
+    <string name="record_openCode_idle">OpenCode 可用</string>
+    <string name="record_openCode_sending">正在发送到 OpenCode…</string>
+    <string name="record_openCode_sent">已发送到 OpenCode。</string>
+    <string name="record_openCode_error_notConfigured">OpenCode 未配置。</string>
+    <string name="record_openCode_error_connectionNotVerified">请先在设置中测试 OpenCode 连接。</string>
+    <string name="record_openCode_error_sendFailed">发送到 OpenCode 失败。</string>
+
+    <string name="settings_aiBuilder_title">AI Builder Space</string>
+    <string name="settings_apiToken_placeholder">API token</string>
+    <string name="settings_apiToken_status">Token</string>
+    <string name="settings_apiToken_saved">已保存</string>
+    <string name="settings_apiToken_notSaved">未保存</string>
+    <string name="settings_apiToken_save">保存</string>
+    <string name="settings_apiToken_clear">清除</string>
+    <string name="settings_endpoint_title">Endpoint</string>
+    <string name="settings_testConnection">测试</string>
+    <string name="settings_apiToken_securityHint">保存后的 token 会安全存储，界面只显示保存状态。</string>
+    <string name="settings_connection_untested">未测试</string>
+    <string name="settings_connection_testing">测试中…</string>
+    <string name="settings_connection_success">连接正常</string>
+    <string name="settings_connection_failed">连接失败</string>
+    <string name="settings_connection_missingToken">请先保存 API token。</string>
+    <string name="settings_connection_saveFailed">无法保存 token。</string>
+    <string name="settings_connection_clearFailed">无法清除 token。</string>
+
+    <string name="settings_openCode_title">OpenCode</string>
+    <string name="settings_openCode_optionalHint">可选。不配置时仍可使用语音输入。只有密码保存在加密存储；服务器地址和用户名会保留在本机。清除只会删除密码。</string>
+    <string name="settings_openCode_testConnection">测试</string>
+    <string name="settings_openCode_connection_untested">未测试</string>
+    <string name="settings_openCode_connection_testing">测试中…</string>
+    <string name="settings_openCode_connection_success">连接正常</string>
+    <string name="settings_openCode_connection_failed">连接失败</string>
+    <string name="settings_openCode_connection_missingConfig">请先保存 OpenCode 配置。</string>
+    <string name="settings_openCode_serverURL">服务器地址</string>
+    <string name="settings_openCode_username">用户名</string>
+    <string name="settings_openCode_password">密码</string>
+    <string name="settings_openCode_status">状态</string>
+    <string name="settings_openCode_configured">已配置</string>
+    <string name="settings_openCode_notConfigured">未配置</string>
+    <string name="settings_openCode_save">保存</string>
+    <string name="settings_openCode_clear">清除</string>
+    <string name="settings_openCode_saveFailed">无法保存 OpenCode 配置。</string>
+    <string name="settings_openCode_clearFailed">无法清除 OpenCode 配置。</string>
+
+    <string name="settings_language_title">语言</string>
+    <string name="settings_language_description">跟随系统语言，或让 VoiceFlow 固定使用某一种语言。</string>
+    <string name="settings_language_system">跟随系统</string>
+    <string name="settings_language_english">English</string>
+    <string name="settings_language_simplifiedChinese">简体中文</string>
+
+    <string name="settings_transcription_title">转写设置</string>
+    <string name="settings_transcription_description">可选的提示，转写前会传给模型。可以用自然语言写明语言、术语或上下文。</string>
+    <string name="settings_transcription_prompt">上下文提示</string>
+    <string name="settings_transcription_prompt_placeholder">例如：把每个英文单词转写为全大写。例：THIS IS A TEST.</string>
+    <string name="settings_transcription_terms">术语字典</string>
+    <string name="settings_transcription_terms_placeholder">用英文逗号分隔需要原样保留的术语，例如 Kubernetes, gRPC, Anthropic。</string>
+</resources>

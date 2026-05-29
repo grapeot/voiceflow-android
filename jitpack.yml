@@ -1,0 +1,7 @@
+# JitPack build config.
+# AGP 9.1 + Kotlin 2.2 require JDK 17+. Pin the JitPack build JDK and publish
+# only the library module (the :app reference app is not a consumable artifact).
+jdk:
+  - openjdk17
+install:
+  - ./gradlew :voiceflowkit:publishReleasePublicationToMavenLocal -x test

@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    English string set, ported value-for-value from the iOS
+    en.lproj/Localizable.strings. Android resource names = the iOS key with
+    '.' replaced by '_'. Format specifiers: iOS %@ -> Android %1$s, %d kept.
+    Apostrophes are escaped (\') as required by Android string resources.
+    The two record.save.* strings are Android-adapted (Files app path wording
+    replaced with the on-device app storage equivalent) while keeping meaning
+    and the %1$s file-name argument.
+-->
+<resources>
+    <string name="app_name">VoiceFlow</string>
+    <string name="permission_microphone_rationale">VoiceFlow uses the microphone to record audio for transcription.</string>
+
+    <string name="tab_record">Record</string>
+    <string name="tab_settings">Settings</string>
+
+    <string name="record_transcript_title">Transcript</string>
+    <string name="record_transcript_placeholder">Speak.</string>
+    <string name="record_transcript_characterCount">%d characters</string>
+    <string name="record_controls_title">Controls</string>
+    <string name="record_start">Record</string>
+    <string name="record_stop">Stop</string>
+    <string name="record_copy">Copy</string>
+    <string name="record_history">History</string>
+    <string name="record_saveRecording">Save Recording</string>
+    <string name="record_resendRecording">Resend Recording</string>
+    <string name="record_save_confirmation_title">Recording Saved</string>
+    <string name="record_save_confirmation_message">Saved as %1$s.\n\nYour saved recordings live in VoiceFlow\'s app storage. Use a file manager or connect your device to access the app\'s Files folder.</string>
+    <string name="record_save_statusLine">Saved %1$s to VoiceFlow storage.</string>
+    <string name="record_save_failed">Could not save the recording.</string>
+    <string name="record_sendToOpenCode">Send to OpenCode</string>
+    <string name="record_openCode_optional">OpenCode is optional. Sending transmits the current transcript to your configured server.</string>
+    <string name="record_openCode_info_accessibility">About OpenCode</string>
+
+    <string name="record_status_idle">Ready</string>
+    <string name="record_status_requestingPermission">Requesting microphone…</string>
+    <string name="record_status_recording">Listening</string>
+    <string name="record_status_transcribing">Transcribing</string>
+    <string name="record_status_ready">Transcript ready</string>
+    <string name="record_status_reconnecting">Reconnecting…</string>
+    <string name="record_status_reconnected">Stream restored.</string>
+
+    <string name="record_error_missingToken">Save an AI Builder token before recording.</string>
+    <string name="record_error_microphoneDenied">Microphone access is disabled. Enable it in Settings to record.</string>
+    <string name="record_error_recordingFailed">Recording failed. Try again.</string>
+    <string name="record_error_transcriptionFailed">Transcription failed. Your token and recording were not logged.</string>
+    <string name="record_error_streamDisconnected">Stream disconnected.</string>
+    <string name="record_error_alert_title">Recording Error</string>
+    <string name="record_error_alert_ok">OK</string>
+
+    <string name="record_clipboard_copied">Copied to clipboard.</string>
+    <string name="record_clipboard_failed">Could not copy to clipboard.</string>
+
+    <string name="record_openCode_idle">OpenCode ready</string>
+    <string name="record_openCode_sending">Sending to OpenCode…</string>
+    <string name="record_openCode_sent">Sent to OpenCode.</string>
+    <string name="record_openCode_error_notConfigured">OpenCode is not configured.</string>
+    <string name="record_openCode_error_connectionNotVerified">Test the OpenCode connection in Settings first.</string>
+    <string name="record_openCode_error_sendFailed">Failed to send to OpenCode.</string>
+
+    <string name="settings_aiBuilder_title">AI Builder Space</string>
+    <string name="settings_apiToken_placeholder">API token</string>
+    <string name="settings_apiToken_status">Token</string>
+    <string name="settings_apiToken_saved">Saved</string>
+    <string name="settings_apiToken_notSaved">Not saved</string>
+    <string name="settings_apiToken_save">Save</string>
+    <string name="settings_apiToken_clear">Clear</string>
+    <string name="settings_endpoint_title">Endpoint</string>
+    <string name="settings_testConnection">Test</string>
+    <string name="settings_apiToken_securityHint">Saved tokens are stored securely and shown only as a saved state.</string>
+    <string name="settings_connection_untested">Not tested</string>
+    <string name="settings_connection_testing">Testing…</string>
+    <string name="settings_connection_success">Connection OK</string>
+    <string name="settings_connection_failed">Connection failed</string>
+    <string name="settings_connection_missingToken">Save an API token first.</string>
+    <string name="settings_connection_saveFailed">Could not save the token.</string>
+    <string name="settings_connection_clearFailed">Could not clear the token.</string>
+
+    <string name="settings_openCode_title">OpenCode</string>
+    <string name="settings_openCode_optionalHint">Optional. VoiceFlow works without OpenCode. Only the password is stored in encrypted storage; server URL and username stay on this device. Clear removes the password only.</string>
+    <string name="settings_openCode_testConnection">Test</string>
+    <string name="settings_openCode_connection_untested">Not tested</string>
+    <string name="settings_openCode_connection_testing">Testing…</string>
+    <string name="settings_openCode_connection_success">Connection OK</string>
+    <string name="settings_openCode_connection_failed">Connection failed</string>
+    <string name="settings_openCode_connection_missingConfig">Save OpenCode configuration first.</string>
+    <string name="settings_openCode_serverURL">Server URL</string>
+    <string name="settings_openCode_username">Username</string>
+    <string name="settings_openCode_password">Password</string>
+    <string name="settings_openCode_status">Status</string>
+    <string name="settings_openCode_configured">Configured</string>
+    <string name="settings_openCode_notConfigured">Not configured</string>
+    <string name="settings_openCode_save">Save</string>
+    <string name="settings_openCode_clear">Clear</string>
+    <string name="settings_openCode_saveFailed">Could not save OpenCode configuration.</string>
+    <string name="settings_openCode_clearFailed">Could not clear OpenCode configuration.</string>
+
+    <string name="settings_language_title">Language</string>
+    <string name="settings_language_description">Use the system language, or keep VoiceFlow in a fixed language.</string>
+    <string name="settings_language_system">System</string>
+    <string name="settings_language_english">English</string>
+    <string name="settings_language_simplifiedChinese">Simplified Chinese</string>
+
+    <string name="settings_transcription_title">Transcription</string>
+    <string name="settings_transcription_description">Optional hints the transcription model reads before working. Include language, vocabulary, or context in plain language.</string>
+    <string name="settings_transcription_prompt">Context prompt</string>
+    <string name="settings_transcription_prompt_placeholder">e.g. Transcribe every word in ALL CAPS. Example: THIS IS A TEST.</string>
+    <string name="settings_transcription_terms">Terms</string>
+    <string name="settings_transcription_terms_placeholder">Comma-separated terms to preserve verbatim, e.g. Kubernetes, gRPC, Anthropic.</string>
+</resources>
