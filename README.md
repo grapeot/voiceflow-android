@@ -189,6 +189,14 @@ voiceflow://record
 Opening this URL launches the app and starts recording immediately. See
 `docs/rfc.md` for the deep-link handling.
 
+### Install (download)
+
+Prebuilt APKs are attached to each [GitHub release](https://github.com/grapeot/voiceflow-android/releases).
+Download `voiceflow-<version>.apk`, open it on the device, and allow installing
+from this source. The release APK is signed with the Android debug key, so it
+installs directly without a Play Store account. Maintainers cut a release with
+`scripts/release.sh <version>`.
+
 ## Building
 
 This is a standalone Gradle project with its own wrapper (Gradle 9.3.1). The

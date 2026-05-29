@@ -55,8 +55,12 @@ repositories 里加 `maven { url = uri("https://jitpack.io") }`，依赖写
 `com.github.grapeot`，artifact 取仓库名）。本地开发可走 Gradle composite build 作为次要
 路径：`includeBuild("../voiceflow-android") { dependencySubstitution { substitute(module("com.yage:voiceflowkit")).using(project(":voiceflowkit")) } }`。
 
-**Release APK**：`:app:assembleRelease` 可产出 release APK（`isMinifyEnabled = false`，
-未签名 / unsigned —— 公开仓库不附带 keystore）。
+**Release / 发布 APK**：`:app:assembleRelease` 产出的 release APK 用 Android debug key
+签名（`buildTypes.release.signingConfig = signingConfigs.getByName("debug")`），因此可
+直接安装——这是参考 app，不走 Play Store，故不维护私有上传密钥。`scripts/release.sh
+<version>` 是发布的 contract：编译签名 APK、打 tag 并 push（JitPack 据此构建 library）、
+用 `gh release create` 发布 GitHub release 并附上 `voiceflow-<version>.apk`。AGENTS.md
+的"发布（Release）"节记录了这个流程。
 
 ### 2026-05-29（VoiceFlowKit Swift → Kotlin Android 移植 + 仓库结构对齐 iOS）
 

@@ -58,6 +58,21 @@ export PATH="$JAVA_HOME/bin:$PATH"
 ./gradlew :voiceflowkit:testDebugUnitTest
 ```
 
+## 发布（Release）
+
+当用户说 "release" 时，跑发布脚本，不要手工拼命令：
+
+```sh
+scripts/release.sh <version>   # 例如 scripts/release.sh 0.1.1
+```
+
+脚本会编译 signed release APK（用 Android debug key 签名，可直接安装；这是
+参考 app，不走 Play Store，故不维护私有上传密钥）、给当前 commit 打 `<version>`
+tag 并 push（JitPack 据此 tag 构建 library），再用 `gh release create` 发布
+GitHub release 并附上 APK。版本号同时也是 JitPack 的依赖坐标
+`com.github.grapeot:voiceflow-android:<version>`，所以发 release 前确认库代码
+已 commit 干净。脚本是发布流程的 contract，改流程改脚本，不要只改文档。
+
 ## 推荐实现方向
 
 复用经过确认的 Android 实现模式：24 kHz PCM16 mono `AudioRecord` 采集、OkHttp

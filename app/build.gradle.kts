@@ -31,6 +31,12 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // This is a reference/sample app, not a Play Store release. We sign
+            // the release build with the auto-generated debug keystore so the
+            // published APK is directly installable (an unsigned APK cannot be
+            // installed) without managing a private upload key. Replace with a
+            // real signingConfig if this app is ever distributed through a store.
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 }
