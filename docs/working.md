@@ -2,6 +2,12 @@
 
 ## Changelog
 
+### 2026-05-30（Start Record launcher shortcut）
+
+**改动**：参考 app 新增 Android static shortcut，`shortcutId=start_record`。用户从 launcher 长按 VoiceFlow 可直接选择 Start Recording；shortcut 复用现有 `voiceflow://record` deep link 和 `MainActivity.handleDeepLinkIntent()` 路径，不新增第二套录音入口。
+
+**验证**：资源编译随 `:app:assembleDebug` 覆盖；录音行为继续由现有 deep link 处理逻辑负责。
+
 ### 2026-05-30（OpenCode connection test 持久化）
 
 **问题**：Android 参考 app 和 iOS 一样，只把 OpenCode connection test 的成功状态留在内存里的 `UiState.openCodeConnectionStatus`。App 重启后回到 `Untested`，导致已经配置好的 OpenCode 仍然要重新点 Test 才能发送。
