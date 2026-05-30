@@ -157,13 +157,29 @@ data class UiState(
             isOpenCodeConfigured &&
             openCodeConnectionStatus == ConnectionTestStatus.Success
 
-    /** Save is allowed while navigable and a persisted capture exists. */
+    /**
+     * Save is a rescue action: allowed whenever a persisted capture exists on
+     * disk, regardless of the lifecycle state. In particular it stays available
+     * while transcription is in flight or stuck in [RecordingStatus.Transcribing],
+     * so the user can always recover the audio they already recorded.
+     *
+     * Note [hasRecordingFile] is only set true after a successful stop persists
+     * the WAV and is cleared when a new session starts, so it is never true while
+     * actively [RecordingStatus.Recording]; gating on it alone already excludes
+     * the mid-capture case that the old `canNavigateTranscriptHistory` guard
+     * protected against.
+     */
     val canSaveRecording: Boolean
-        get() = canNavigateTranscriptHistory && hasRecordingFile
+        get() = hasRecordingFile
 
-    /** Resend can also force-stop an active recording and replay its persisted WAV. */
+    /**
+     * Resend is also a rescue action: it can force-stop an active recording and
+     * re-transcribe its persisted WAV, or re-run transcription on an existing
+     * capture even when the previous attempt is stuck in
+     * [RecordingStatus.Transcribing].
+     */
     val canResendRecording: Boolean
-        get() = hasToken && (recordingStatus == RecordingStatus.Recording || canSaveRecording)
+        get() = hasToken && (recordingStatus == RecordingStatus.Recording || hasRecordingFile)
 
     /** Flat filename for the save-confirmation dialog (avoids dotted access). */
     val lastSavedRecordingFileName: String?
@@ -739,8 +755,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val snapshot = _state.value
         if (!settings.hasToken()) return
         if (snapshot.recordingStatus != RecordingStatus.Recording) {
+            // Rescue path: as long as a persisted WAV exists we re-run
+            // transcription, even if the previous attempt is stuck in
+            // Transcribing. We deliberately do not require the lifecycle to be
+            // navigable (Idle/Ready) here — forcing a re-transcribe is the whole
+            // point of the rescue. resendLastRecording sets the status back to
+            // Transcribing below, replacing any stuck in-flight attempt.
             val file = lastRecordingFile
-            if (!snapshot.canNavigateTranscriptHistory) return
             if (file == null || !file.exists()) return
         }
 

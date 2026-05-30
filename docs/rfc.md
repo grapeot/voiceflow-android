@@ -95,6 +95,26 @@ live session 通过 `startSession()` 拿 `VoiceFlowSession`、在 viewModel scop
 Kit internal。本地开发时 app 通过 Gradle 工程内 `project(":voiceflowkit")` 直接依赖
 library；远程消费走 JitPack（见"消费方式"）。
 
+### 救援门控：保存 / 重发录音
+
+`UiState` 上的派生属性 `canSaveRecording` / `canResendRecording` 决定三点菜单里
+"保存录音""重发录音"两项的 enabled 状态。这两项是用户的兜底抢救路径，必须在转写卡死
+（停在 `RecordingStatus.Transcribing`）时仍然可用，因此门控只看"是否已有持久化的音频
+文件"：
+
+- `canSaveRecording = hasRecordingFile`
+- `canResendRecording = hasToken && (recordingStatus == Recording || hasRecordingFile)`
+
+刻意去掉了原先的 `canNavigateTranscriptHistory`（仅 Idle/Ready 可导航）依赖——它会在
+Transcribing 时变 false，把救援按钮一起锁死。`hasRecordingFile` 只在 Stop 成功落盘 WAV
+后置 true、新会话开始即清掉，录音进行中恒为 false，所以纯靠它门控天然排除了"录音未落盘"
+的情况，不需要再叠 `canNavigateTranscriptHistory`。`MainViewModel.resendLastRecording`
+的内部守卫同步放开：非 Recording 分支不再要求 `canNavigateTranscriptHistory`，只要
+WAV 存在即把状态打回 Transcribing 并强制重新转写（关闭当前 WS、用已落盘 WAV 重走
+`finishTranscriptionFromLastRecording`），替换掉卡住的 in-flight 尝试。`RecordScreen`
+里"重发录音"菜单项也去掉了 `recordingStatus != Transcribing` 的额外禁用条件，直接绑
+`canResendRecording`。与 iOS 行为对齐。
+
 ## VoiceFlowKit 公开 API
 
 下面是暴露给 host 的 surface（对齐 iOS 版，名字按 Kotlin 习惯）：
