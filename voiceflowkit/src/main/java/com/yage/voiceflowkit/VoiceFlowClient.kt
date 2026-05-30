@@ -108,6 +108,42 @@ class VoiceFlowClient internal constructor(
     }
 
     /**
+     * Transcribe audio preserved from an aborted realtime session. The handle
+     * remains valid until [discardPreservedAudio] is called or the OS clears temp files.
+     */
+    suspend fun transcribe(
+        preservedAudio: VoiceFlowPreservedAudio,
+        onPartialTranscript: ((String) -> Unit)? = null,
+    ): TranscriptionResult {
+        val snapshot = configMutex.withLock { config }
+        val token = currentToken(snapshot)
+        val pcm = try {
+            preservedAudio.file.readBytes()
+        } catch (t: Throwable) {
+            throw VoiceFlowError.AudioConversionFailed
+        }
+        if (pcm.isEmpty()) throw VoiceFlowError.EmptyTranscript
+        try {
+            val text = transcriber.transcribeBulkPcm(
+                pcm = pcm,
+                baseURL = snapshot.endpoint,
+                token = token,
+                model = snapshot.model,
+                context = RealtimeSessionContext(prompt = snapshot.prompt, terms = snapshot.terms),
+                onPartialTranscript = onPartialTranscript,
+            )
+            return TranscriptionResult(text = text, requestId = preservedAudio.id)
+        } catch (realtime: RealtimeTranscriptionError) {
+            throw VoiceFlowError.from(realtime)
+        }
+    }
+
+    /** Delete the temporary file behind a preserved audio handle. */
+    fun discardPreservedAudio(preservedAudio: VoiceFlowPreservedAudio) {
+        preservedAudio.file.delete()
+    }
+
+    /**
      * Verify endpoint reachability + token validity. Throws on any failure.
      * Non-[VoiceFlowError] causes are wrapped in [VoiceFlowError.Underlying],
      * mirroring the Swift facade.

@@ -15,6 +15,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import com.yage.voiceflowkit.VoiceFlowPreservedAudio
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -56,6 +57,7 @@ internal interface RealtimeLiveTranscriptionSession {
     suspend fun heartbeat()
     suspend fun finalize(onPartialTranscript: ((String) -> Unit)?): String
     suspend fun cancel()
+    suspend fun abortPreservingAudio(): VoiceFlowPreservedAudio?
     suspend fun connectionPhase(): RealtimeConnectionPhase
 }
 

@@ -126,10 +126,13 @@ WAV 存在即把状态打回 Transcribing 并强制重新转写（关闭当前 W
 - `VoiceFlowClient`（class）：入口。`constructor(config)`（prod 路径，内部 new
   `RealtimeTranscriptionClient()`）；`updateConfig(config)` / `currentConfig()`
   （内部 `Mutex` 守护）；`startSession(): VoiceFlowSession`；
-  `transcribe(wavFile, onPartialTranscript?): TranscriptionResult`；`testConnection()`。
+  `transcribe(wavFile, onPartialTranscript?): TranscriptionResult`；
+  `transcribe(preservedAudio, onPartialTranscript?): TranscriptionResult`；
+  `discardPreservedAudio(preservedAudio)`；`testConnection()`。
   companion `makeStub(config, liveTranscript, bulkTranscript)` 返回 offline client。
 - `VoiceFlowSession`（class）：实时会话句柄。`sendAudioChunk(chunk)` 推 PCM、`ping()`
-  心跳、`commitAndStop(onPartialTranscript?): String` 收口、`cancel()` 取消、
+  心跳、`commitAndStop(onPartialTranscript?): String` 收口、`cancel()` 取消并清理缓存、
+  `abortPreservingAudio(): VoiceFlowPreservedAudio?` 关闭连接但保留已录 PCM 供后续重试、
   `connectionPhase(): VoiceFlowConnectionPhase` 读相位、`events: Flow<VoiceFlowEvent>`
   订阅事件。`events` 由 `SessionEventBridge` 背书的 `SharedFlow`（replay 可配，
   extraBufferCapacity 16，对齐 Swift `AsyncStream` 的 `bufferingNewest(16)`）；调用方
@@ -151,6 +154,8 @@ WAV 存在即把状态打回 Transcribing 并强制重新转写（关闭当前 W
   `MicrophoneUnavailable` / `Underlying(detail)`。companion `from(RealtimeTranscriptionError)`
   在 facade 边界把内部 error 翻译成公开 error（对齐 Swift 的 `init(_:)`）。
 - `TranscriptionResult`（data class）：`(text, requestId)`。`requestId` 是一个新 UUID。
+- `VoiceFlowPreservedAudio`（class）：`abortPreservingAudio()` 返回的轻量句柄，公开
+  `id` / `byteCount`，底层临时 PCM 文件只由 Kit 管理。
 - `StreamCaption` / `StreamCaptionStore`：双层 caption 模型（persistent + transient
   ~3 秒闪现），`StreamCaptionStore.caption` 是 `StateFlow`，`flashTransient` 在内部
   scope 上 `delay` 后清除，重复调用重置计时。存 localization key 而非显示字符串。
@@ -185,6 +190,7 @@ internal interface RealtimeLiveTranscriptionSession
   suspend heartbeat()
   suspend finalize(onPartial): String
   suspend cancel()
+  suspend abortPreservingAudio(): VoiceFlowPreservedAudio?
   suspend connectionPhase(): RealtimeConnectionPhase
 ```
 
@@ -225,6 +231,8 @@ internal constructor 接受注入，public constructor 默认 new prod 实现。
      delta。**库每个 delta 回调一次**，逐 delta 打字机的责任在 app 层 —— app 必须把
      这些回调按序喂给 UI 而不能让 conflating StateFlow 把中间快照吞掉（参考 app 的
      channel-drain 管线见 `docs/working.md` 2026-05-30 条目）。
+   - `abortPreservingAudio()`：关闭当前 WebSocket、停止 recovery、保留 `AudioChunkCache`
+     的 PCM 文件并返回 `VoiceFlowPreservedAudio`。旧 `cancel()` 语义保持不变，仍会删除缓存。
    - `attachInitialSession(session)`：初始连接先 replay 再 attach。
 4. **isRecovering 门闩**：恢复期间暂停 live send，避免与 replay 交错。
 

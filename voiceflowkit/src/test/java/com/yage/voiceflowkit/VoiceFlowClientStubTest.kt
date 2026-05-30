@@ -128,6 +128,25 @@ class VoiceFlowClientStubTest {
     }
 
     @Test
+    fun `stub transcribes preserved audio after abort`() = runTest {
+        val client = VoiceFlowClient.makeStub(
+            liveTranscript = "live",
+            bulkTranscript = "retried audio",
+        )
+        val session = client.startSession()
+        session.sendAudioChunk(ByteArray(4800) { 7 })
+
+        val preserved = session.abortPreservingAudio()
+
+        assertNotNull(preserved)
+        assertEquals(4800, preserved!!.byteCount)
+        val result = client.transcribe(preserved)
+        assertEquals("retried audio", result.text)
+        assertEquals(preserved.id, result.requestId)
+        client.discardPreservedAudio(preserved)
+    }
+
+    @Test
     fun `transcribe surfaces AudioConversionFailed for a bad wav`() = runTest {
         val client = VoiceFlowClient.makeStub()
         val tmp = java.io.File.createTempFile("voiceflow-bad", ".wav")

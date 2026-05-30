@@ -1,7 +1,9 @@
 package com.yage.voiceflowkit.internal
 
+import com.yage.voiceflowkit.VoiceFlowPreservedAudio
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.io.File
 
 /**
  * Offline stub transcriber. Port of Swift `MockRealtimeTranscriptionClient` +
@@ -68,10 +70,14 @@ private class MockLiveSessionProxy(
     private val mutex = Mutex()
     private var phase: RealtimeConnectionPhase = RealtimeConnectionPhase.Connected
     private var appendedChunkCount = 0
+    private var appendedPcm = ByteArray(0)
     private var cancelled = false
 
     override suspend fun appendAudioChunk(chunk: ByteArray) {
-        mutex.withLock { appendedChunkCount += 1 }
+        mutex.withLock {
+            appendedChunkCount += 1
+            appendedPcm += chunk
+        }
     }
 
     override suspend fun heartbeat() = Unit
@@ -90,6 +96,18 @@ private class MockLiveSessionProxy(
             cancelled = true
             phase = RealtimeConnectionPhase.Disconnected
         }
+    }
+
+    override suspend fun abortPreservingAudio(): VoiceFlowPreservedAudio? {
+        val pcm = mutex.withLock {
+            cancelled = true
+            phase = RealtimeConnectionPhase.Disconnected
+            appendedPcm
+        }
+        if (pcm.isEmpty()) return null
+        val file = File.createTempFile("voiceflow-stub-preserved", ".pcm")
+        file.writeBytes(pcm)
+        return VoiceFlowPreservedAudio(byteCount = pcm.size, file = file)
     }
 
     override suspend fun connectionPhase(): RealtimeConnectionPhase = mutex.withLock { phase }

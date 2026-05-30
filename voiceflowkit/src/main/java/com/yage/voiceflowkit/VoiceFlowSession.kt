@@ -9,6 +9,18 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import java.io.File
+import java.util.UUID
+
+/**
+ * Captured PCM audio preserved after aborting a realtime session. Hosts keep this
+ * lightweight handle and ask [VoiceFlowClient] to transcribe or discard it later.
+ */
+class VoiceFlowPreservedAudio internal constructor(
+    val id: String = UUID.randomUUID().toString(),
+    val byteCount: Int,
+    internal val file: File,
+)
 
 /**
  * A realtime transcription session. Push PCM chunks, optionally ping,
@@ -65,6 +77,18 @@ class VoiceFlowSession internal constructor(
     /** Cancel without committing. Idempotent. */
     suspend fun cancel() {
         underlying.cancel()
+    }
+
+    /**
+     * Abort the current WebSocket session but keep captured audio for a later retry.
+     * Returns null when no audio was captured.
+     */
+    suspend fun abortPreservingAudio(): VoiceFlowPreservedAudio? {
+        try {
+            return underlying.abortPreservingAudio()
+        } catch (realtime: RealtimeTranscriptionError) {
+            throw VoiceFlowError.from(realtime)
+        }
     }
 
     /** Current connection phase (host uses this to drive UI). */
