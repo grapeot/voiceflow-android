@@ -13,6 +13,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -33,11 +34,10 @@ import kotlin.math.max
  * - [WaveformMode.Generating]: a traveling pulse that sweeps left to right,
  *   used while the backend is finalizing transcription (no mic signal).
  *
- * Pixelate geometry: 23 square blocks, 9dp wide, 6dp spacing, 80dp tall,
- * centered, square corners (no radius). The bar count was raised 15 → 23 for a
- * finer, more detailed row; the per-bar width was trimmed 14 → 9dp so 23 bars
- * (23*9 + 22*6 = 339dp) still fit inside the screen's content width without
- * overflowing, while each bar stays a clear stack of pixel cells. The
+ * Geometry: 23 soft-cornered bars, 9dp wide, 6dp spacing, 80dp tall, centered
+ * and vertically symmetric, each a single rounded rectangle (corner radius =
+ * barWidth/2) — matching iOS's final waveform look. 23 bars (23*9 + 22*6 =
+ * 339dp) fit inside the screen's content width without overflowing. The
  * three-mode animation logic is unchanged from the iOS port. Updates throttled
  * to ~30Hz.
  */
@@ -147,55 +147,23 @@ private fun DrawScope.drawBars(
     val total = BAR_COUNT * barWidthPx + (BAR_COUNT - 1) * barSpacingPx
     val originX = (size.width - total) / 2f
 
-    // Pixelate: each bar is no longer one smooth rectangle — it's a column of
-    // small square pixels with visible gaps, so you can read the bar as "built
-    // from blocks". Cell ~5.5dp with a ~1.75dp gap between cells.
-    val pixelCell = 5.5.dp.toPx()
-    val pixelGap = 1.75.dp.toPx()
-    val pixelPitch = pixelCell + pixelGap
-
-    // How many whole pixel columns fit across one bar's width, centred. At least
-    // one column so a narrow bar still draws.
-    val cols = max(1, ((barWidthPx + pixelGap) / pixelPitch).toInt())
-    val colsBlockWidth = cols * pixelCell + (cols - 1) * pixelGap
+    // Each bar is one smooth, soft-cornered rectangle (corner radius =
+    // barWidth/2), vertically centred and symmetric about the centre line —
+    // matching iOS's final waveform look (no pixel-block stacking).
+    val cornerRadius = CornerRadius(barWidthPx / 2f, barWidthPx / 2f)
 
     for (i in 0 until BAR_COUNT) {
         val barX = originX + i * (barWidthPx + barSpacingPx)
         // height = level * (height - 4) + 2, clamped to at least 1px.
         val rawHeight = bars[i] * (size.height - 4f) + 2f
         val barHeight = max(rawHeight, 1f)
-        val halfHeight = barHeight / 2f
 
-        // Centre the pixel columns within the bar's allotted width.
-        val colStartX = barX + (barWidthPx - colsBlockWidth) / 2f
-
-        // From the centre line, stack pixels symmetrically up and down. A cell is
-        // drawn whenever any part of it falls within the half-height — this keeps
-        // the idle (very short) row showing at least the centre block.
-        // Push both halves half a gap away from the centre line so there is a
-        // visible seam down the middle (matching iOS) — otherwise the two centre
-        // blocks butt together and read as one tall block.
-        val halfGap = pixelGap / 2f
-        var rowsFromCenter = 0
-        while (rowsFromCenter * pixelPitch < halfHeight) {
-            val offset = rowsFromCenter * pixelPitch
-            for (c in 0 until cols) {
-                val x = colStartX + c * pixelPitch
-                // Upper block (its bottom edge sits half a gap above the centre).
-                drawRect(
-                    color = color,
-                    topLeft = Offset(x, centerY - halfGap - offset - pixelCell),
-                    size = Size(pixelCell, pixelCell),
-                )
-                // Lower block, mirrored across the centre line (half a gap below).
-                drawRect(
-                    color = color,
-                    topLeft = Offset(x, centerY + halfGap + offset),
-                    size = Size(pixelCell, pixelCell),
-                )
-            }
-            rowsFromCenter++
-        }
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(barX, centerY - barHeight / 2f),
+            size = Size(barWidthPx, barHeight),
+            cornerRadius = cornerRadius,
+        )
     }
 }
 
