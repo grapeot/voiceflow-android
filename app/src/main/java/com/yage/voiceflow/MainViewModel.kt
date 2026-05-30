@@ -29,6 +29,7 @@ import com.yage.voiceflowkit.VoiceFlowMicrophone
 import com.yage.voiceflowkit.VoiceFlowSession
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -37,6 +38,30 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+
+/**
+ * Reconcile a newly streamed transcript snapshot against the currently displayed
+ * text, for the stop->finalize typewriter. The backend emits a growing series of
+ * snapshots during finalize; this collapses each snapshot into the next text to
+ * show, with append-only semantics where possible:
+ *
+ *  - identical content -> returns the SAME [current] instance, so the consumer can
+ *    cheaply skip a recomposition (verified with assertSame in the unit test);
+ *  - [incoming] is a forward growth of [current] (current is a prefix) -> returns
+ *    [incoming] (append);
+ *  - [current] is empty -> returns [incoming];
+ *  - otherwise the backend re-segmented earlier text (incoming is not a prefix
+ *    superset) -> returns [incoming] (replace).
+ *
+ * Kept top-level and framework-free so it can be unit tested directly.
+ */
+fun applyStreamedTranscript(current: String, incoming: String): String {
+    if (incoming == current) return current
+    if (current.isEmpty()) return incoming
+    // Forward append (incoming extends current) and the re-segmentation replace
+    // case both resolve to showing the incoming snapshot.
+    return incoming
+}
 
 /**
  * All UI state surfaced to Compose, kept as one immutable snapshot updated via
@@ -193,6 +218,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var levelJob: Job? = null
     private var timerJob: Job? = null
     private var transientCaptionJob: Job? = null
+
+    /**
+     * Stop->finalize typewriter pipeline. During finalize the kit calls back once
+     * per delta (from several Dispatchers.IO coroutines), but pushing each snapshot
+     * straight into the conflating [_state] StateFlow lets Compose drop the
+     * intermediate values, so the whole transcript appears at once. Instead each
+     * finalize snapshot is funneled through a non-conflating UNLIMITED channel and
+     * drained by a single Main-thread consumer that applies one frame per tick,
+     * producing a real per-delta typewriter. The channel + job are created fresh on
+     * every stop and torn down deterministically.
+     */
+    private var finalizeTranscriptChannel: Channel<String>? = null
+    private var finalizeTypewriterJob: Job? = null
 
     /** The persisted WAV of the most recent capture; drives save/resend. */
     private var lastRecordingFile: File? = null
@@ -590,6 +628,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun finishLiveTranscriptionSession() {
         stopStreamHeartbeat()
         isTranscriptionTeardown = true
+        // Start a fresh per-delta typewriter pipeline before any finalize callbacks
+        // arrive (recording-time deltas are still suppressed by handleStreamEvent).
+        startFinalizeTypewriter()
         try {
             val activeSession = session
             if (activeSession == null) {
@@ -609,12 +650,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             cancelLiveTranscriptionSession()
 
             if (isUsableTranscript(streamText)) {
+                // Let the typewriter drain every queued delta before the final
+                // write, so the animation is never truncated by the overwrite.
+                drainFinalizeTypewriter()
                 completeStopTranscriptionSuccess(streamText)
                 return
             }
 
             val bulk = finishTranscriptionFromLastRecording(presentErrorOnFailure = false)
             if (bulk != null && isUsableTranscript(bulk)) {
+                drainFinalizeTypewriter()
                 completeStopTranscriptionSuccess(bulk)
                 return
             }
@@ -655,6 +700,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun isUsableTranscript(text: String): Boolean = text.trim().length > 3
 
     private fun completeStopTranscriptionSuccess(text: String) {
+        stopFinalizeTypewriter()
         _recordErrorKey.value = null
         _state.update {
             it.copy(
@@ -673,6 +719,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun completeStopTranscriptionFailure() {
+        stopFinalizeTypewriter()
         val current = _state.value.transcript
         if (isUsableTranscript(current)) {
             _state.update {
@@ -809,8 +856,63 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun updateTranscriptDuringFinalize(partial: String) {
-        _state.update { it.copy(transcript = partial) }
+        // Route the delta through the non-conflating typewriter channel so Compose
+        // sees every snapshot in order. trySend always succeeds on an UNLIMITED
+        // channel; if no pipeline is active (defensive), fall back to a direct
+        // state write so a snapshot is never silently dropped.
+        val channel = finalizeTranscriptChannel
+        if (channel == null || channel.trySend(partial).isSuccess.not()) {
+            _state.update { it.copy(transcript = partial) }
+        }
         throttledStreamClipboardWrite(partial)
+    }
+
+    /**
+     * Start a fresh stop->finalize typewriter pipeline: tear down any prior one,
+     * open a new non-conflating UNLIMITED channel (a CONFLATED channel would drop
+     * intermediate deltas and reintroduce the one-shot bug), and launch a single
+     * Main-thread consumer that drains it one frame per tick via
+     * [applyStreamedTranscript]. Each `stop` calls this so every session begins
+     * with a clean pipeline.
+     */
+    private fun startFinalizeTypewriter() {
+        teardownFinalizeTypewriter()
+        val channel = Channel<String>(Channel.UNLIMITED)
+        finalizeTranscriptChannel = channel
+        finalizeTypewriterJob = viewModelScope.launch(Dispatchers.Main) {
+            for (snapshot in channel) {
+                _state.update { current ->
+                    val next = applyStreamedTranscript(current.transcript, snapshot)
+                    if (next == current.transcript) current else current.copy(transcript = next)
+                }
+                delay(FINALIZE_TYPEWRITER_FRAME_MS)
+            }
+        }
+    }
+
+    /**
+     * Gracefully drain the typewriter before writing the final text: close the
+     * channel so the consumer finishes every already-queued snapshot, then join
+     * (NOT cancel) so the animation is not truncated mid-flight. Safe to call when
+     * no pipeline is active.
+     */
+    private suspend fun drainFinalizeTypewriter() {
+        finalizeTranscriptChannel?.close()
+        finalizeTranscriptChannel = null
+        finalizeTypewriterJob?.join()
+        finalizeTypewriterJob = null
+    }
+
+    /** Defensive teardown: cancel the consumer and drop the channel immediately. */
+    private fun stopFinalizeTypewriter() {
+        teardownFinalizeTypewriter()
+    }
+
+    private fun teardownFinalizeTypewriter() {
+        finalizeTranscriptChannel?.close()
+        finalizeTranscriptChannel = null
+        finalizeTypewriterJob?.cancel()
+        finalizeTypewriterJob = null
     }
 
     private fun startLiveEventConsumer(session: VoiceFlowSession) {
@@ -1096,6 +1198,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         timerJob?.cancel()
         transientCaptionJob?.cancel()
         levelJob?.cancel()
+        teardownFinalizeTypewriter()
         // discard() releases the recorder and cancels the capture loop; the
         // session's socket is torn down by the kit once its scope is gone.
         microphone.discard()
@@ -1108,6 +1211,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         /** iOS `transientStreamCaptionDuration` = 3s. */
         private const val TRANSIENT_CAPTION_DURATION_MS = 3_000L
+
+        /** One typewriter frame per drained finalize delta (~83 fps cap). */
+        private const val FINALIZE_TYPEWRITER_FRAME_MS = 12L
 
         val Factory: ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
