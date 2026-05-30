@@ -5,9 +5,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.yage.voiceflow.R
 
 /**
  * Single source of truth for VoiceFlow's visual language: amber accent on
@@ -81,6 +84,30 @@ object DesignTokens {
         val caption = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Normal)
         val captionSub = TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Normal)
         val buttonLabel = TextStyle(fontSize = 15.sp, fontWeight = FontWeight.Medium)
+    }
+
+    /**
+     * Pixelate design language: the Silkscreen bitmap face (OFL) renders
+     * pixel-discipline numerals and Latin labels — the timer, English status
+     * captions, and STOP/Record button labels. CJK glyphs are absent from
+     * Silkscreen, so Compose silently falls back to the system face for any
+     * Chinese run; that fallback is intentional, not a defect.
+     *
+     * [Pixel] is a plain `FontFamily` constant — `R.font.*` references resolve
+     * lazily at draw time, so no composable scope is needed here, and these
+     * styles can be read from any call site exactly like [Typography].
+     */
+    object Pixel {
+        val family = FontFamily(
+            Font(R.font.silkscreen, FontWeight.Normal),
+            Font(R.font.silkscreen_bold, FontWeight.Bold),
+        )
+
+        // Silkscreen has a large optical baseline, so sizes run a touch smaller
+        // than their sans counterparts (timer 56 → 48) to occupy similar space.
+        val timer = TextStyle(fontFamily = family, fontSize = 48.sp, fontWeight = FontWeight.Normal)
+        val caption = TextStyle(fontFamily = family, fontSize = 14.sp, fontWeight = FontWeight.Normal)
+        val button = TextStyle(fontFamily = family, fontSize = 14.sp, fontWeight = FontWeight.Bold)
     }
 
     object Spacing {

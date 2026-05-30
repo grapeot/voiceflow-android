@@ -19,11 +19,9 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.SaveAlt
 import androidx.compose.material.icons.outlined.Send
-import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -38,7 +36,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yage.voiceflow.MainViewModel
@@ -105,7 +102,8 @@ fun RecordScreen(
             Text(
                 text = state.recordingTimerText,
                 color = DesignTokens.Palette.textPrimary,
-                style = DesignTokens.Typography.timer.copy(fontFamily = FontFamily.Monospace),
+                // Pixelate: the MM:SS timer is pure digits → Silkscreen.
+                style = DesignTokens.Pixel.timer,
             )
             Spacer(Modifier.height(DesignTokens.Spacing.s))
             StatusText(
@@ -163,7 +161,6 @@ fun RecordScreen(
             CapsuleButton(
                 title = stringRes(if (isStop) R.string.record_stop else R.string.record_start),
                 role = if (isStop) CapsuleButtonRole.Secondary else CapsuleButtonRole.Primary,
-                icon = if (isStop) Icons.Outlined.Stop else Icons.Outlined.Mic,
                 isEnabled = state.canStartRecording || state.canStopRecording,
                 onClick = {
                     if (isStop) viewModel.stopRecording() else viewModel.startRecording()

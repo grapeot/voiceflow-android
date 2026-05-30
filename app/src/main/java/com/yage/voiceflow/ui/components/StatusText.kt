@@ -33,7 +33,9 @@ fun StatusText(
 
     Text(
         text = text,
-        style = DesignTokens.Typography.caption,
+        // Pixelate: Silkscreen renders the English captions ("Listening", etc.);
+        // any CJK run falls back to the system face automatically — intended.
+        style = DesignTokens.Pixel.caption,
         color = color,
         textAlign = TextAlign.Center,
         maxLines = 2,
