@@ -2,6 +2,39 @@
 
 ## Changelog
 
+### 2026-05-30（救援：保存 / 重发录音始终可用，不被卡住的转写锁死）
+
+**问题**：用户 Stop 后转写偶尔卡死，状态停在 `Transcribing`。此时三点菜单里"保存录音"
+和"重发录音"被灰掉，用户连把已经录好的音频抢救出来都做不到。
+
+**根因**：`UiState.canSaveRecording = canNavigateTranscriptHistory && hasRecordingFile`，
+而 `canNavigateTranscriptHistory` 只在 `Idle || Ready` 为 true（语义是"非录制中，可做
+历史导航"）。卡在 `Transcribing` 时它为 false，把 save 灰掉；`canResendRecording` 又
+依赖 `canSaveRecording`，被连累一起灰。
+
+**搞清 `canNavigateTranscriptHistory` 隐含什么**：它 = `recordingStatus == Idle ||
+Ready`，唯一对 save 有意义的"必要前提"是"不在录音中"（录音中 WAV 还没落盘，不该保存）。
+但这个前提已经被 `hasRecordingFile` 覆盖——它只在 Stop 成功落盘 WAV 后置 true
+（MainViewModel:618），新会话开始即清掉（:557），所以录音进行中恒为 false。结论：去掉
+`canNavigateTranscriptHistory` 对 save 无害，纯靠 `hasRecordingFile` 门控既能在
+Transcribing/卡死时放开，又不会在录音中误开。
+
+**改动**：
+- `UiState.canSaveRecording = hasRecordingFile`（去掉 `canNavigateTranscriptHistory`）。
+- `UiState.canResendRecording = hasToken && (recordingStatus == Recording ||
+  hasRecordingFile)`（对齐，不再经 `canSaveRecording` 间接依赖导航门）。
+- `MainViewModel.resendLastRecording`：非 Recording 分支去掉
+  `if (!snapshot.canNavigateTranscriptHistory) return` 守卫，只要 WAV 存在就强制重转
+  （状态打回 Transcribing，关 WS、用已落盘 WAV 重走 `finishTranscriptionFromLastRecording`，
+  替换卡住的 in-flight 尝试）。重转核心逻辑未动。
+- `RecordScreen` 重发菜单项去掉 `&& state.recordingStatus != RecordingStatus.Transcribing`
+  的额外禁用，直接绑 `canResendRecording`——卡在 Transcribing 正是要放开的场景。
+
+**验证**：新增 `RescueGatingTest`（app/src/test），构造 `UiState` 覆盖：Transcribing +
+hasRecordingFile 时 save/resend 为 true、无文件 save 为 false、resend 缺 token 为 false、
+Recording 中 resend 为 true、正常 Ready 流程 save/resend 仍 true。`./gradlew
+:app:assembleDebug :app:testDebugUnitTest` 通过。与 iOS 行为对齐。
+
 ### 2026-05-30（Stop→finalize 打字机效果：逐 delta 显示）
 
 参考 app 的转写在 stop 后会"一把出现"整段文字，而不是逐字打出来。修掉它，让 finalize

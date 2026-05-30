@@ -181,6 +181,15 @@ chevron 浏览最近历史、手动复制、三点菜单里的保存录音（导
 一次性整段弹出。实现细节（non-conflating channel-drain 管线绕开 StateFlow conflation）
 见 `docs/working.md` 2026-05-30 条目；前提是录音期不输出的门必须保留。
 
+**保存录音 / 重发录音是救援手段，不被卡住状态锁死**：只要本机已经持久化过一段录音
+（最近一次 Stop 成功落盘了 WAV），三点菜单里的"保存录音"和"重发录音"就始终可用，
+即便转写仍在进行、或卡死在 Transcribing 状态。这是用户的兜底抢救路径——哪怕后端 finalize
+挂住，用户也能把已经录好的音频导出，或强制重新转写一遍。"重发录音"的语义是关掉当前
+WebSocket、用已落盘的 WAV 重新走一遍转写，可以替换掉卡住的 in-flight 尝试。门控只看
+"音频文件是否存在"（`hasRecordingFile`），不再依赖"是否处于 Idle/Ready 可导航状态"；
+由于 `hasRecordingFile` 只在 Stop 成功落盘后置 true、新会话开始即清掉，它在录音进行中
+永远为 false，所以纯靠它门控不会破坏正常录制流程。与 iOS 行为对齐。
+
 OpenCode 是可选增强：只有在用户填好配置并通过连接测试后，Record tab 才显示"发送到
 OpenCode"入口（gating 对齐 iOS）。`voiceflow://record` deep link 已注册，打开后切到
 Record tab 并复用现有开始录音流程，不接受 token、文本或其他外部 payload。

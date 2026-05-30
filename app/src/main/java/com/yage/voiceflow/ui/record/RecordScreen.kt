@@ -242,8 +242,7 @@ private fun SecondaryControls(
                 DropdownMenuItem(
                     text = { Text(stringRes(R.string.record_resendRecording)) },
                     leadingIcon = { Icon(Icons.Outlined.Refresh, contentDescription = null) },
-                    enabled = state.canResendRecording &&
-                        state.recordingStatus != RecordingStatus.Transcribing,
+                    enabled = state.canResendRecording,
                     onClick = {
                         menuExpanded = false
                         viewModel.resendLastRecording()
