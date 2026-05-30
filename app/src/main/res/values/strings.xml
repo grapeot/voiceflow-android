@@ -11,6 +11,8 @@
 <resources>
     <string name="app_name">VoiceFlow</string>
     <string name="permission_microphone_rationale">VoiceFlow uses the microphone to record audio for transcription.</string>
+    <string name="shortcut_start_record_short">Record</string>
+    <string name="shortcut_start_record_long">Start recording</string>
 
     <string name="tab_record">Record</string>
     <string name="tab_settings">Settings</string>

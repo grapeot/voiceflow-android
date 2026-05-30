@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="start_record"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_start_record_short"
+        android:shortcutLongLabel="@string/shortcut_start_record_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="voiceflow://record"
+            android:targetPackage="com.yage.voiceflow"
+            android:targetClass="com.yage.voiceflow.MainActivity" />
+    </shortcut>
+</shortcuts>

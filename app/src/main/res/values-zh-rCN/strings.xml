@@ -9,6 +9,8 @@
 <resources>
     <string name="app_name">VoiceFlow</string>
     <string name="permission_microphone_rationale">VoiceFlow 使用麦克风录制音频并进行转写。</string>
+    <string name="shortcut_start_record_short">录音</string>
+    <string name="shortcut_start_record_long">开始录音</string>
 
     <string name="tab_record">录音</string>
     <string name="tab_settings">设置</string>
