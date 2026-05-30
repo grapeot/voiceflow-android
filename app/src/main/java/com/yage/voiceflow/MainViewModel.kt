@@ -136,9 +136,9 @@ data class UiState(
     val canSaveRecording: Boolean
         get() = canNavigateTranscriptHistory && hasRecordingFile
 
-    /** Resend additionally requires a saved AI Builder token. */
+    /** Resend can also force-stop an active recording and replay its persisted WAV. */
     val canResendRecording: Boolean
-        get() = canSaveRecording && hasToken
+        get() = hasToken && (recordingStatus == RecordingStatus.Recording || canSaveRecording)
 
     /** Flat filename for the save-confirmation dialog (avoids dotted access). */
     val lastSavedRecordingFileName: String?
@@ -690,11 +690,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun resendLastRecording() {
         val snapshot = _state.value
-        // canResendRecording = navigable + file exists + has token.
-        val file = lastRecordingFile
-        if (!snapshot.canNavigateTranscriptHistory) return
-        if (file == null || !file.exists()) return
         if (!settings.hasToken()) return
+        if (snapshot.recordingStatus != RecordingStatus.Recording) {
+            val file = lastRecordingFile
+            if (!snapshot.canNavigateTranscriptHistory) return
+            if (file == null || !file.exists()) return
+        }
 
         _state.update {
             it.copy(
@@ -704,6 +705,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         viewModelScope.launch {
+            if (snapshot.recordingStatus == RecordingStatus.Recording) {
+                val wav = try {
+                    stopRecordingTimer()
+                    microphone.stop()
+                } catch (t: Throwable) {
+                    cancelLiveTranscriptionSession()
+                    presentRecordError("record.error.transcriptionFailed")
+                    return@launch
+                }
+
+                if (wav == null || !wav.exists() || wav.length() == 0L) {
+                    wav?.let { runCatching { it.delete() } }
+                    cancelLiveTranscriptionSession()
+                    presentRecordError("record.error.transcriptionFailed")
+                    return@launch
+                }
+
+                lastRecordingFile = wav
+                _state.update { it.copy(hasRecordingFile = true) }
+                cancelLiveTranscriptionSession()
+            }
+
             val bulk = finishTranscriptionFromLastRecording(presentErrorOnFailure = true)
             if (bulk != null) {
                 _state.update {

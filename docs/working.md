@@ -2,6 +2,11 @@
 
 ## Changelog
 
+### 2026-05-29（录音中 Resend 作为 websocket 卡死逃生口）
+
+- 对齐 iOS 参考 app：`Resend` 在录音中也可用。点击后先停止本地 `VoiceFlowMicrophone` 并拿到持久化 WAV，取消 live session / heartbeat / event collector，再走已有 bulk transcription 重放音频。
+- 已有录音的保存和重发路径保持原语义；只有 `Recording` 状态新增强制重试分支，避免 websocket 卡死时用户只能等待 Stop finalize。
+
 ### 2026-05-29（参考 app 落地 + 集成 skill + 完整测试套件 + 发布配置）
 
 这条记录在同日靠后的工作，supersede 下面那条里关于"app 尚未 scaffold / 测试覆盖缺口 /
