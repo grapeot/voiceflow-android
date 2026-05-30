@@ -114,9 +114,9 @@ fun CapsuleButton(
         }
         Text(
             text = title,
-            // Pixelate: STOP/Record labels render in Silkscreen; a localized CJK
-            // label falls back to the system face automatically.
-            style = DesignTokens.Pixel.button,
+            // Pixel hint pulled back: STOP/Record labels return to the regular
+            // button face instead of Silkscreen.
+            style = DesignTokens.Typography.buttonLabel,
             color = foreground,
             maxLines = 1,
             overflow = TextOverflow.Visible,

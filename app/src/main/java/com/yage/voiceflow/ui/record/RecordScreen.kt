@@ -102,8 +102,10 @@ fun RecordScreen(
             Text(
                 text = state.recordingTimerText,
                 color = DesignTokens.Palette.textPrimary,
-                // Pixelate: the MM:SS timer is pure digits → Silkscreen.
-                style = DesignTokens.Pixel.timer,
+                // Pixel hint pulled back: the MM:SS timer returns to the regular
+                // 56sp Thin face. The pixel language now lives only in the
+                // waveform, status caption, tab glyphs and logo.
+                style = DesignTokens.Typography.timer,
             )
             Spacer(Modifier.height(DesignTokens.Spacing.s))
             StatusText(

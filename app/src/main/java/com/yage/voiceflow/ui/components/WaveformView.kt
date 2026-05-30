@@ -33,14 +33,17 @@ import kotlin.math.max
  * - [WaveformMode.Generating]: a traveling pulse that sweeps left to right,
  *   used while the backend is finalizing transcription (no mic signal).
  *
- * Pixelate geometry: 15 chunky square blocks, 14dp wide, 6dp spacing, 80dp
- * tall, centered, square corners (no radius). The block count/size carry the
- * "pixel as discipline" language; the three-mode animation logic is unchanged
- * from the iOS port. Updates throttled to ~30Hz.
+ * Pixelate geometry: 23 square blocks, 9dp wide, 6dp spacing, 80dp tall,
+ * centered, square corners (no radius). The bar count was raised 15 → 23 for a
+ * finer, more detailed row; the per-bar width was trimmed 14 → 9dp so 23 bars
+ * (23*9 + 22*6 = 339dp) still fit inside the screen's content width without
+ * overflowing, while each bar stays a clear stack of pixel cells. The
+ * three-mode animation logic is unchanged from the iOS port. Updates throttled
+ * to ~30Hz.
  */
 enum class WaveformMode { Idle, Active, Generating }
 
-private const val BAR_COUNT = 15
+private const val BAR_COUNT = 23
 private const val FRAME_INTERVAL_SECONDS = 1.0 / 30.0
 
 @Composable
@@ -50,7 +53,7 @@ fun WaveformView(
     level: Float = 0f,
     modifier: Modifier = Modifier,
 ) {
-    val barWidthDp = 14.dp
+    val barWidthDp = 9.dp
     val barSpacingDp = 6.dp
 
     // The animation loop below runs inside a LaunchedEffect(mode) that only
