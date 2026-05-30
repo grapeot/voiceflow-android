@@ -2,6 +2,49 @@
 
 ## Changelog
 
+### 2026-05-30（Stop→finalize 打字机效果：逐 delta 显示）
+
+参考 app 的转写在 stop 后会"一把出现"整段文字，而不是逐字打出来。修掉它，让 finalize
+阶段做到真打字机：来一个 delta 显示一个 delta。
+
+**设计决策（必须保留的前提）**：录音时音频实时发到远端，但**故意不让远端输出**转写
+（零散的实时语音会拉低识别质量，这是有意的取舍）。用户 Stop 之后才发指令让远端
+output，然后逐个 delta 推进显示。因此 `handleStreamEvent` 里 `recordingStatus ==
+Recording` 时丢弃 `PartialTranscript` 的门必须保留；VoiceFlowKit 库和控制指令一律不动。
+
+**根因：StateFlow conflation**。`RealtimeLiveSessionHandle` 在 finalize 阶段每个 delta
+确实逐个回调，但 app 层 `updateTranscriptDuringFinalize`（MainViewModel）直接
+`_state.update { transcript = partial }`，把每个快照推进一个 conflating 的
+`MutableStateFlow`。加上 finalize callback 来自多个 `Dispatchers.IO` 协程的突发写入，
+Compose 跟不上 —— 中间快照被合并吞掉，最终只渲染最后一帧，表现为"一把出现"。
+
+**修复：non-conflating channel-drain 打字机管线**（全在 `MainViewModel`，不碰库）：
+- 新增 `applyStreamedTranscript(current, incoming)` 纯函数做快照 reconciliation：
+  内容相同 → 返回 `current` 同一实例（让消费者 skip recomposition）；current 为空或
+  incoming 是前缀增长 → 返回 incoming（append）；backend 重新分段、非前缀 → 返回
+  incoming（replace）。top-level、无框架依赖，可被单测直接调用。
+- 新增 `finalizeTranscriptChannel: Channel<String>`。`updateTranscriptDuringFinalize`
+  改为 `trySend(partial)`；没有活跃管线时 defensive 兜底直接写 state，clipboard
+  throttling 保留。
+- `startFinalizeTypewriter()` 开一个 **fresh `Channel.UNLIMITED`**（绝不能用
+  CONFLATED，否则又丢中间值），在 `viewModelScope.launch(Dispatchers.Main)` 里单消费者
+  循环：每取一个 snapshot 应用 `applyStreamedTranscript` 再 `delay(12)`（12ms 一帧）。
+- 生命周期：`finishLiveTranscriptionSession` 顶部调 `startFinalizeTypewriter()`（先
+  teardown 旧管线，每次 stop 干净开始）。写最终文本前调 suspend
+  `drainFinalizeTypewriter()` —— `close()` channel 让消费者把排队快照全部 drain 完，
+  再 `join()` 那个 job（**不是 cancel**，避免动画被截断后被整段覆盖）。
+  `completeStopTranscriptionSuccess/Failure` 调 `stopFinalizeTypewriter()` 防御性
+  teardown；`onCleared` 也 teardown 防泄漏。
+
+**测试**：`app/src/test/java/com/yage/voiceflow/FinalizeTypewriterTest.kt` 覆盖
+`applyStreamedTranscript` 的 append/同实例/重分段/空起步四种语义，以及用 ViewModel 同款
+原语（UNLIMITED channel + 单消费者 + `MutableStateFlow`）证明每个 delta 都按序成为独立
+state 值、重复快照不产生多余 churn。`app/build.gradle.kts` 加上
+`testImplementation(libs.junit)` 与 `testImplementation(libs.kotlinx.coroutines.test)`。
+
+**验证**：`./gradlew :app:assembleDebug` 编译通过；`./gradlew :app:testDebugUnitTest`
+全绿（`FinalizeTypewriterTest` 6 个用例全过）。均用 Android Studio JBR 作 JAVA_HOME。
+
 ### 2026-05-29（录音中 Resend 作为 websocket 卡死逃生口）
 
 - 对齐 iOS 参考 app：`Resend` 在录音中也可用。点击后先停止本地 `VoiceFlowMicrophone` 并拿到持久化 WAV，取消 live session / heartbeat / event collector，再走已有 bulk transcription 重放音频。

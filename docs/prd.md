@@ -167,12 +167,19 @@ VoiceFlowKit，不碰 internal 包，目的是给 host AI 一个"长什么样算
 同时本身就是一个能用的语音输入工具。
 
 应用只有两个 tab，对齐 iOS。Record tab 提供开始/停止录音、录音状态与波形
-（`WaveformView`）、实时 partial transcript 显示、转写完成后自动复制到剪贴板、左右
+（`WaveformView`）、转写完成后自动复制到剪贴板、左右
 chevron 浏览最近历史、手动复制、三点菜单里的保存录音（导出 WAV 到 app 外部目录）与重发
 录音。历史只存本机，默认保留最近若干条。Settings tab 提供 AI Builder Space API token
 输入与连接测试、默认 endpoint 说明（endpoint 固定，不可编辑）、可选 OpenCode 配置
 （server URL、username、password），以及语言偏好（System / English / 简体中文）和转写
 上下文（prompt / terms）输入。
+
+**转写显示体验（录音不输出 / Stop 后逐 delta 打字机）**：录音过程中音频实时上传到
+后端，但参考 app **刻意不显示实时 partial transcript** —— 零散的实时语音会拉低识别
+质量，所以录音期间抑制后端文本输出。用户 Stop 之后才请求后端 finalize 输出，转写文字
+以**逐 delta 的打字机效果**渐进显示（来一个 delta 显示一个 delta），而不是后台累积完
+一次性整段弹出。实现细节（non-conflating channel-drain 管线绕开 StateFlow conflation）
+见 `docs/working.md` 2026-05-30 条目；前提是录音期不输出的门必须保留。
 
 OpenCode 是可选增强：只有在用户填好配置并通过连接测试后，Record tab 才显示"发送到
 OpenCode"入口（gating 对齐 iOS）。`voiceflow://record` deep link 已注册，打开后切到

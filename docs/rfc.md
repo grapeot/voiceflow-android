@@ -200,6 +200,11 @@ internal constructor 接受注入，public constructor 默认 new prod 实现。
      `preserveForRetry` / `restoreAfterRetry`；resolved 为空映射 `EmptyTranscript`。
    - `ingestServerEvent` / `shouldNotifyUI`：复刻 Swift 的 finalize-aware 过滤（非
      finalize 期抑制 textDelta；非 finalize 期抑制 recoverable "buffer too small" error）。
+     这条门也实现了产品上"录音期不输出转写"的取舍（见 `docs/prd.md`）：录音时实时
+     textDelta 被抑制以避免零散语音拉低识别质量，只有 Stop 后 finalize 期才逐个回调
+     delta。**库每个 delta 回调一次**，逐 delta 打字机的责任在 app 层 —— app 必须把
+     这些回调按序喂给 UI 而不能让 conflating StateFlow 把中间快照吞掉（参考 app 的
+     channel-drain 管线见 `docs/working.md` 2026-05-30 条目）。
    - `attachInitialSession(session)`：初始连接先 replay 再 attach。
 4. **isRecovering 门闩**：恢复期间暂停 live send，避免与 replay 交错。
 
