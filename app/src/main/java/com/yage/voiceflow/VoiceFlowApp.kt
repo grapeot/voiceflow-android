@@ -1,11 +1,7 @@
 package com.yage.voiceflow
 
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Mic
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -19,8 +15,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import com.yage.voiceflow.i18n.stringRes
 import com.yage.voiceflow.i18n.stringResByKey
+import com.yage.voiceflow.ui.components.PixelGearIcon
+import com.yage.voiceflow.ui.components.PixelMicIcon
 import com.yage.voiceflow.ui.record.RecordScreen
 import com.yage.voiceflow.ui.settings.SettingsScreen
 import com.yage.voiceflow.ui.theme.DesignTokens
@@ -65,14 +64,14 @@ fun VoiceFlowApp(viewModel: MainViewModel) {
                 NavigationBarItem(
                     selected = selectedTab == Tab.Record,
                     onClick = { selectedTab = Tab.Record },
-                    icon = { Icon(Icons.Outlined.Mic, contentDescription = null) },
+                    icon = { PixelMicIcon(color = tabIconColor(selectedTab == Tab.Record)) },
                     label = { Text(stringRes(R.string.tab_record)) },
                     colors = navItemColors(),
                 )
                 NavigationBarItem(
                     selected = selectedTab == Tab.Settings,
                     onClick = { selectedTab = Tab.Settings },
-                    icon = { Icon(Icons.Outlined.Settings, contentDescription = null) },
+                    icon = { PixelGearIcon(color = tabIconColor(selectedTab == Tab.Settings)) },
                     label = { Text(stringRes(R.string.tab_settings)) },
                     colors = navItemColors(),
                 )
@@ -145,3 +144,13 @@ private fun navItemColors() = NavigationBarItemDefaults.colors(
     selectedTextColor = DesignTokens.Palette.accent,
     indicatorColor = DesignTokens.Palette.accentMuted,
 )
+
+/**
+ * Pixelate tab glyphs are drawn on a raw [androidx.compose.foundation.Canvas],
+ * so they don't inherit [NavigationBarItemDefaults] icon tinting — colour is
+ * resolved explicitly here: amber when selected, muted grey otherwise, matching
+ * the one-accent-per-screen discipline.
+ */
+@Composable
+private fun tabIconColor(selected: Boolean): Color =
+    if (selected) DesignTokens.Palette.accent else DesignTokens.Palette.textTertiary

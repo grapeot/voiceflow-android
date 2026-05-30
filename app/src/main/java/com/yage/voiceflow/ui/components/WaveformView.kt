@@ -13,7 +13,6 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -34,12 +33,14 @@ import kotlin.math.max
  * - [WaveformMode.Generating]: a traveling pulse that sweeps left to right,
  *   used while the backend is finalizing transcription (no mic signal).
  *
- * Geometry quoted from the Swift source: 36 bars, 3dp wide, 4dp spacing,
- * 80dp tall, centered, corner radius = barWidth/2. Updates throttled to ~30Hz.
+ * Pixelate geometry: 15 chunky square blocks, 14dp wide, 6dp spacing, 80dp
+ * tall, centered, square corners (no radius). The block count/size carry the
+ * "pixel as discipline" language; the three-mode animation logic is unchanged
+ * from the iOS port. Updates throttled to ~30Hz.
  */
 enum class WaveformMode { Idle, Active, Generating }
 
-private const val BAR_COUNT = 36
+private const val BAR_COUNT = 15
 private const val FRAME_INTERVAL_SECONDS = 1.0 / 30.0
 
 @Composable
@@ -49,8 +50,8 @@ fun WaveformView(
     level: Float = 0f,
     modifier: Modifier = Modifier,
 ) {
-    val barWidthDp = 3.dp
-    val barSpacingDp = 4.dp
+    val barWidthDp = 14.dp
+    val barSpacingDp = 6.dp
 
     // The animation loop below runs inside a LaunchedEffect(mode) that only
     // restarts when `mode` changes. A plain capture of `level` would freeze at
@@ -142,19 +143,56 @@ private fun DrawScope.drawBars(
     val centerY = size.height / 2f
     val total = BAR_COUNT * barWidthPx + (BAR_COUNT - 1) * barSpacingPx
     val originX = (size.width - total) / 2f
-    val cornerRadius = CornerRadius(barWidthPx / 2f, barWidthPx / 2f)
+
+    // Pixelate: each bar is no longer one smooth rectangle — it's a column of
+    // small square pixels with visible gaps, so you can read the bar as "built
+    // from blocks". Cell ~5.5dp with a ~1.75dp gap between cells.
+    val pixelCell = 5.5.dp.toPx()
+    val pixelGap = 1.75.dp.toPx()
+    val pixelPitch = pixelCell + pixelGap
+
+    // How many whole pixel columns fit across one bar's width, centred. At least
+    // one column so a narrow bar still draws.
+    val cols = max(1, ((barWidthPx + pixelGap) / pixelPitch).toInt())
+    val colsBlockWidth = cols * pixelCell + (cols - 1) * pixelGap
 
     for (i in 0 until BAR_COUNT) {
-        val x = originX + i * (barWidthPx + barSpacingPx)
+        val barX = originX + i * (barWidthPx + barSpacingPx)
         // height = level * (height - 4) + 2, clamped to at least 1px.
         val rawHeight = bars[i] * (size.height - 4f) + 2f
         val barHeight = max(rawHeight, 1f)
-        drawRoundRect(
-            color = color,
-            topLeft = Offset(x, centerY - barHeight / 2f),
-            size = Size(barWidthPx, barHeight),
-            cornerRadius = cornerRadius,
-        )
+        val halfHeight = barHeight / 2f
+
+        // Centre the pixel columns within the bar's allotted width.
+        val colStartX = barX + (barWidthPx - colsBlockWidth) / 2f
+
+        // From the centre line, stack pixels symmetrically up and down. A cell is
+        // drawn whenever any part of it falls within the half-height — this keeps
+        // the idle (very short) row showing at least the centre block.
+        // Push both halves half a gap away from the centre line so there is a
+        // visible seam down the middle (matching iOS) — otherwise the two centre
+        // blocks butt together and read as one tall block.
+        val halfGap = pixelGap / 2f
+        var rowsFromCenter = 0
+        while (rowsFromCenter * pixelPitch < halfHeight) {
+            val offset = rowsFromCenter * pixelPitch
+            for (c in 0 until cols) {
+                val x = colStartX + c * pixelPitch
+                // Upper block (its bottom edge sits half a gap above the centre).
+                drawRect(
+                    color = color,
+                    topLeft = Offset(x, centerY - halfGap - offset - pixelCell),
+                    size = Size(pixelCell, pixelCell),
+                )
+                // Lower block, mirrored across the centre line (half a gap below).
+                drawRect(
+                    color = color,
+                    topLeft = Offset(x, centerY + halfGap + offset),
+                    size = Size(pixelCell, pixelCell),
+                )
+            }
+            rowsFromCenter++
+        }
     }
 }
 
@@ -173,7 +211,9 @@ private fun currentBars(mode: WaveformMode, t: Double, history: FloatArray): Flo
             FloatArray(BAR_COUNT) { i ->
                 val raw = abs(i.toDouble() - position)
                 val distance = minOf(raw, BAR_COUNT.toDouble() - raw)
-                val intensity = max(0.0, 1.0 - distance / 3.0)
+                // Narrower falloff (/1.5) so the pulse reads crisply across the
+                // few wide blocks instead of smearing over the whole row.
+                val intensity = max(0.0, 1.0 - distance / 1.5)
                 (0.04 + intensity * 0.96).toFloat()
             }
         }

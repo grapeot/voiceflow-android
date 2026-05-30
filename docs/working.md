@@ -170,3 +170,25 @@ library 模块独立于任何 app 模块构建与发布。
    `skills/adding_voice_input_with_voiceflowkit.md`）。
 3. 需要演示/验收真机行为时再 scaffold `app/` 参考模块。
 4. 准备发布到 Maven repository（目前走 `includeBuild` composite build）。
+
+---
+
+## Pixelate 视觉设计语言落地（参考 app）
+
+把 "Pixelate（像素即纪律）" 设计语言落到参考 app（`app/` 模块，`com.yage.voiceflow`），与 iOS 严格对齐（详见新建的 `docs/design.md`）。这是一次纯视觉改造，不动协议/恢复/库逻辑。
+
+**字体**
+- 引入 Silkscreen 像素字体（`res/font/silkscreen.ttf` / `silkscreen_bold.ttf`，OFL 1.1，license 在 `assets/licenses/silkscreen_OFL.txt`）。`DesignTokens.Pixel` 新增 timer/caption/button 像素 TextStyle。
+- 混合字体策略：像素字只用于计时器 / 英文状态 / 英文按钮标签；转写正文 + 所有中文走系统字体（CJK 自动 fallback）。
+
+**组件**
+- `WaveformView`：bar 36→15、去圆角；每个 bar 改成小像素格堆叠（cell 5.5dp + gap 1.75dp），双向对称，中线留缝。保留 Idle/Active/Generating 三态动画。
+- `CapsuleButton`：形状从 CircleShape 换成 `PixelRoundedShape`（3 级方块阶梯角）；录音按钮只留文字标签、不放图标。
+- `PixelTabIcon`（新）：mic/gear 7×7 像素网格 Canvas 自绘，替换 Material 矢量；`VoiceFlowApp` 两个 tab 用它。
+- `RecordScreen` / `StatusText`：计时器/状态/按钮标签接上像素字。
+
+**App icon / logo**：换成像素语音气泡+波形标记（琥珀单色近黑底），全 6 档 mipmap launcher（含 round）。
+
+**Bug 修复**：波形像素格中线处曾两块并在一起没缝——上下两半各从中线推半个 gap 修复。
+
+**验证**：`./gradlew :app:assembleDebug` 通过（JBR JAVA_HOME）；`:app:testDebugUnitTest` NO-SOURCE 真空通过。模拟器 emulator-5554 截图逐项确认：像素计时/状态、像素方块波形（中线有缝）、像素阶梯角录音按钮（纯文字）、像素 Tab mic/gear、新 app icon。用户在模拟器上确认界面与图标均正确。
