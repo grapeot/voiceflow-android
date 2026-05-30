@@ -61,3 +61,12 @@ token 定义在 `ui/theme/DesignTokens.kt`（`Palette` 对象），是 iOS `Desi
 - app icon 与 in-app logo 是一个**像素语音气泡 + 内含波形**的标记（琥珀单色、近黑底），同时传达"语音"和"AI 理解"。取代了早期那个多色像素脑子。
 - Android：`mipmap-*/ic_launcher.png` + `ic_launcher_round.png` 全 6 档密度。
 - iOS：`Assets.xcassets/logo.imageset`（@1x/2x/3x）+ `AppIcon.appiconset`（1024 三态）。
+
+
+## Pixelate 收缩为 hint（修订）
+
+实际使用后发现整套像素"用力过猛"，收缩为"一点 hint"：
+- **计时器 00:00** 和 **STOP/RECORD 按钮标签** 改回常规系统字体（去掉像素块感）——这两个又大又重的元素用像素显得吵。计时器用 `Typography.timer`（56sp Thin），按钮用 `Typography.buttonLabel`。
+- **保留像素**的只剩"轻"元素：状态字（Listening，`Pixel.caption`）、波形像素方块、Tab mic/gear 图标、logo/app icon。
+- 波形 bar 从 15 增到 **23**（更细腻），bar 宽相应从 14dp 收到 9dp 以排得下。
+- 规律：像素只作 hint，落在小号/轻量元素上；大号粗体元素回归干净现代。两端（iOS/Android）一致。
