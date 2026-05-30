@@ -2,6 +2,14 @@
 
 ## Changelog
 
+### 2026-05-30（OpenCode connection test 持久化）
+
+**问题**：Android 参考 app 和 iOS 一样，只把 OpenCode connection test 的成功状态留在内存里的 `UiState.openCodeConnectionStatus`。App 重启后回到 `Untested`，导致已经配置好的 OpenCode 仍然要重新点 Test 才能发送。
+
+**改动**：`SettingsStore` 新增 plain SharedPreferences 标记 `opencode_connection_verified`。`testOpenCodeConnection()` 成功后写 true；失败、保存/清除密码、修改 URL 或用户名时写 false。`refreshSettingsState()` 启动时在密码存在、URL/用户名非空且标记为 true 的情况下直接恢复 `ConnectionTestStatus.Success`。
+
+**验证**：与 iOS 语义对齐；编译和 JVM 测试见本次 PR 验收记录。
+
 ### 2026-05-30（救援：保存 / 重发录音始终可用，不被卡住的转写锁死）
 
 **问题**：用户 Stop 后转写偶尔卡死，状态停在 `Transcribing`。此时三点菜单里"保存录音"

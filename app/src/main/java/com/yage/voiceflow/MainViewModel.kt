@@ -289,13 +289,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun refreshSettingsState() {
         _state.update {
+            val hasOpenCodePassword = settings.hasOpenCodePassword()
+            val openCodeServerURL = settings.openCodeServerURL
+            val openCodeUsername = settings.openCodeUsername
+            val openCodeConnectionStatus = if (hasOpenCodePassword &&
+                openCodeServerURL.trim().isNotEmpty() &&
+                openCodeUsername.trim().isNotEmpty() &&
+                settings.openCodeConnectionVerified
+            ) {
+                ConnectionTestStatus.Success
+            } else {
+                ConnectionTestStatus.Untested
+            }
             it.copy(
                 hasToken = settings.hasToken(),
                 tokenDisplay = settings.tokenDisplay(),
-                openCodeServerURL = settings.openCodeServerURL,
-                openCodeUsername = settings.openCodeUsername,
-                hasSavedOpenCodePassword = settings.hasOpenCodePassword(),
+                openCodeServerURL = openCodeServerURL,
+                openCodeUsername = openCodeUsername,
+                hasSavedOpenCodePassword = hasOpenCodePassword,
                 openCodePasswordDisplay = settings.openCodePasswordDisplay(),
+                openCodeConnectionStatus = openCodeConnectionStatus,
                 prompt = settings.prompt,
                 terms = settings.termsRaw,
                 language = settings.language,
@@ -400,6 +413,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 it.openCodeConnectionStatus
             }
+            if (it.openCodeServerURL != value) settings.openCodeConnectionVerified = false
             it.copy(openCodeServerURL = value, openCodeConnectionStatus = status)
         }
     }
@@ -412,6 +426,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 it.openCodeConnectionStatus
             }
+            if (it.openCodeUsername != value) settings.openCodeConnectionVerified = false
             it.copy(openCodeUsername = value, openCodeConnectionStatus = status)
         }
     }
@@ -428,6 +443,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     openCodeConnectionStatus = ConnectionTestStatus.Untested,
                 )
             }
+            settings.openCodeConnectionVerified = false
         } else {
             _state.update {
                 it.copy(openCodeSendStatus = OpenCodeSendStatus.Failed("settings.openCode.saveFailed"))
@@ -450,12 +466,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 openCodeConnectionStatus = ConnectionTestStatus.Untested,
             )
         }
+        settings.openCodeConnectionVerified = false
     }
 
     fun testOpenCodeConnection() {
         val snapshot = _state.value
         val password = settings.getOpenCodePassword()
         if (!snapshot.isOpenCodeConfigured || password.isEmpty()) {
+            settings.openCodeConnectionVerified = false
             _state.update {
                 it.copy(
                     openCodeConnectionStatus = ConnectionTestStatus.Failed(
@@ -474,8 +492,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     username = snapshot.openCodeUsername.trim(),
                     password = password,
                 )
+                settings.openCodeConnectionVerified = true
                 _state.update { it.copy(openCodeConnectionStatus = ConnectionTestStatus.Success) }
             } catch (t: Throwable) {
+                settings.openCodeConnectionVerified = false
                 _state.update {
                     it.copy(
                         openCodeConnectionStatus = ConnectionTestStatus.Failed(

@@ -16,8 +16,9 @@ import com.yage.voiceflowkit.VoiceFlowConfig
  *    Builder token and the OpenCode password — the only two secrets, matching
  *    iOS which keeps both in the Keychain.
  *  - PLAIN ([SharedPreferences] file `voiceflow_prefs`): OpenCode server URL,
- *    OpenCode username, transcription prompt, transcription terms, and the UI
- *    language preference. These are non-secret and on iOS live in UserDefaults.
+ *    OpenCode username, whether the current OpenCode config has already tested
+ *    successfully, transcription prompt, transcription terms, and the UI language
+ *    preference. These are non-secret and on iOS live in UserDefaults.
  *
  * The AI Builder endpoint is NOT stored or editable: it is always
  * [VoiceFlowConfig.DEFAULT_ENDPOINT], mirroring iOS.
@@ -102,6 +103,12 @@ class SettingsStore private constructor(
             plain.edit().putString(KEY_OPENCODE_USERNAME, value).apply()
         }
 
+    var openCodeConnectionVerified: Boolean
+        get() = plain.getBoolean(KEY_OPENCODE_CONNECTION_VERIFIED, false)
+        set(value) {
+            plain.edit().putBoolean(KEY_OPENCODE_CONNECTION_VERIFIED, value).apply()
+        }
+
     // --- Transcription settings (non-secret) ---
 
     /** RAW context prompt as typed by the user. Persisted verbatim. */
@@ -161,6 +168,7 @@ class SettingsStore private constructor(
         private const val KEY_OPENCODE_PASSWORD = "opencode_password"
         private const val KEY_OPENCODE_URL = "opencode_server_url"
         private const val KEY_OPENCODE_USERNAME = "opencode_username"
+        private const val KEY_OPENCODE_CONNECTION_VERIFIED = "opencode_connection_verified"
         private const val KEY_PROMPT = "transcription_prompt"
         private const val KEY_TERMS = "transcription_terms"
         private const val KEY_LANGUAGE = "app_language"
