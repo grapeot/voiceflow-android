@@ -1,6 +1,7 @@
 package com.yage.voiceflowkit.internal
 
 import android.util.Log
+import com.yage.voiceflowkit.VoiceFlowPreservedAudio
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.TimeoutCancellationException
@@ -47,6 +48,7 @@ internal class RealtimeLiveSessionHandle(
     private var finalizeSignal: CompletableDeferred<Unit>? = null
     private var finalizeText = FinalizeTranscriptAccumulator()
     private var finalizePartialCallback: ((String) -> Unit)? = null
+    private var hasPreservedAudio = false
 
     override suspend fun connectionPhase(): RealtimeConnectionPhase = mutex.withLock { phase }
 
@@ -88,6 +90,7 @@ internal class RealtimeLiveSessionHandle(
 
     override suspend fun appendAudioChunk(chunk: ByteArray) {
         if (chunk.isEmpty()) return
+        if (mutex.withLock { hasPreservedAudio }) return
         cache.append(chunk)
         val activeSession = mutex.withLock { if (isRecovering) null else session } ?: return
         try {
@@ -181,12 +184,32 @@ internal class RealtimeLiveSessionHandle(
     }
 
     override suspend fun cancel() {
+        val shouldRemoveCache = mutex.withLock { !hasPreservedAudio }
         mutex.withLock {
             session?.close()
             session = null
             phase = RealtimeConnectionPhase.Disconnected
         }
-        cache.remove()
+        if (shouldRemoveCache) cache.remove()
+    }
+
+    override suspend fun abortPreservingAudio(): VoiceFlowPreservedAudio? {
+        mutex.withLock {
+            session?.close()
+            session = null
+            isRecovering = false
+            phase = RealtimeConnectionPhase.Disconnected
+            if (isFinalizing) {
+                completeFinalize(Result.failure(RealtimeTranscriptionError.ConnectionLost("Session aborted")))
+            }
+        }
+        val preserved = cache.preservedAudio()
+        if (preserved == null) {
+            cache.remove()
+            return null
+        }
+        mutex.withLock { hasPreservedAudio = true }
+        return preserved
     }
 
     /** Receive a server event for state bookkeeping (called by the owning client). */
@@ -338,6 +361,7 @@ internal class RealtimeLiveSessionHandle(
      * a `RecoveryFailed` event is emitted. Port of Swift `recover`.
      */
     private suspend fun recover(reason: Throwable) {
+        if (mutex.withLock { hasPreservedAudio }) return
         val oldSession = mutex.withLock {
             if (isRecovering) return
             isRecovering = true

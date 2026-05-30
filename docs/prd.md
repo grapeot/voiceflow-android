@@ -30,7 +30,10 @@ VoiceFlowKit 按 [generative kernel](https://yage.ai/ai-software-engineering.htm
   集成流程、验收标准、已知陷阱、reference 在哪读。指南是一等公民，跟代码一起 ship、
   一起 review、一起更新。
 - **杠杆工具集**：`VoiceFlowClient.makeStub(...)`（offline stub client，让 host 的
-  仪器测试不依赖网络也能跑通）、`VoiceFlowAudioMetering.normalizedLevel(pcm16le)`
+  仪器测试不依赖网络也能跑通）、`VoiceFlowPreservedAudio` +
+  `VoiceFlowSession.abortPreservingAudio()` + `VoiceFlowClient.transcribe(preservedAudio)`
+  （WebSocket 卡住时关闭 live session、保留已录 PCM、随后重试识别）、
+  `VoiceFlowAudioMetering.normalizedLevel(pcm16le)`
   （host 想自己接 `AudioRecord` 而不用我们的 mic，也能算出一致的 0..1 level）、
   `StreamCaption` / `StreamCaptionStore`（双层 caption 状态机给 host 做
   "reconnecting…" / "stream restored." 这种 UX）。这些都是"AI 在概念上能想到，但
@@ -44,7 +47,7 @@ VoiceFlowKit 按 [generative kernel](https://yage.ai/ai-software-engineering.htm
   抛一个泛化的 `apiFailure`。`VoiceFlowError` 是 `Exception` 的 sealed 子类，可以直接
   `catch` + `when` 模式匹配。
 - **暴露细粒度控制**：`VoiceFlowSession` 把 `sendAudioChunk` / `ping` /
-  `commitAndStop` / `cancel` / `connectionPhase` / `events` 全部公开。Host 如果想用
+  `commitAndStop` / `cancel` / `abortPreservingAudio` / `connectionPhase` / `events` 全部公开。Host 如果想用
   自己的 `AudioRecord` 不用 `VoiceFlowMicrophone`、想做自定义心跳 cadence、想消费
   partial transcript 同时还想自己监听 phase change，都不需要 hack。
 - **DI-agnostic**：库不依赖 Hilt / Compose，只暴露普通构造函数和工厂函数。内部

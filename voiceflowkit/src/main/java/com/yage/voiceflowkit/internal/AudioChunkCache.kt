@@ -1,5 +1,6 @@
 package com.yage.voiceflowkit.internal
 
+import com.yage.voiceflowkit.VoiceFlowPreservedAudio
 import java.io.File
 import java.io.FileOutputStream
 import java.io.RandomAccessFile
@@ -73,5 +74,10 @@ internal class AudioChunkCache(
             file.delete()
             byteCountValue = 0
         }
+    }
+
+    fun preservedAudio(): VoiceFlowPreservedAudio? = synchronized(lock) {
+        if (byteCountValue <= 0) return@synchronized null
+        VoiceFlowPreservedAudio(byteCount = byteCountValue, file = file)
     }
 }

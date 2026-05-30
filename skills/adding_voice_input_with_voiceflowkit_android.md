@@ -29,7 +29,8 @@ artifactId 是 `voiceflowkit`，package root `com.yage.voiceflowkit`。对外暴
 | `VoiceFlowConfig` | data class：endpoint + `tokenProvider: suspend () -> String` + 可选 prompt/terms。一个 config = 一次 session 的参数 |
 | `VoiceFlowClient` | `config` 给它 → 它给你 `VoiceFlowSession`（live）或一次性 `transcribe(wavFile)`（返回 `TranscriptionResult`）。suspend 方法，内部 Mutex 串行化 config |
 | `TranscriptionResult` | data class：`text`（转写文本）+ `requestId`（每次请求一个 UUID，用于关联日志）。`transcribe(wavFile)` 的返回值 |
-| `VoiceFlowSession` | 一次 live 录音会话。`sendAudioChunk` 喂 PCM、`ping` 保活、`commitAndStop` 拿 final、`cancel` 中止；`events: Flow<VoiceFlowEvent>` 拿 partial transcript 和连接相位 |
+| `VoiceFlowSession` | 一次 live 录音会话。`sendAudioChunk` 喂 PCM、`ping` 保活、`commitAndStop` 拿 final、`cancel` 中止并清理缓存、`abortPreservingAudio` 中止但保留已录 PCM；`events: Flow<VoiceFlowEvent>` 拿 partial transcript 和连接相位 |
+| `VoiceFlowPreservedAudio` | `abortPreservingAudio()` 返回的轻量句柄。公开 `id` / `byteCount`，可交给 `VoiceFlowClient.transcribe(preservedAudio)` 重试识别，完成后用 `discardPreservedAudio` 清理 |
 | `VoiceFlowMicrophone` | 录音入口（构造要 `Context`）：`hasPermission()` → `start(onPCMChunk:)` → `stop()`。onPCMChunk 推 PCM16 24kHz mono chunk，直接转给 session。`audioLevel: Flow<Float>` 是 0..1 的 EMA 平滑电平，画波形用 |
 | `VoiceFlowEvent` | sealed class：`PartialTranscript(text)` / `PhaseChanged(phase)` / `RecoveryStarted` / `RecoveryFailed(message)` |
 | `VoiceFlowConnectionPhase` | enum：`Connecting / Connected / Recovering / Generating / Disconnected` |
@@ -40,6 +41,7 @@ artifactId 是 `voiceflowkit`，package root `com.yage.voiceflowkit`。对外暴
 
 - **Live streaming**（推荐，默认）：`client.startSession()` → 边录音边收 partial → `session.commitAndStop()` 拿 final。延迟低，体验好。
 - **Bulk**：`client.transcribe(wavFile)` 一次性传一个 WAV，返回 `TranscriptionResult`（读 `.text` 拿转写、`.requestId` 做关联）。签名是 `suspend fun transcribe(wavFile: File, onPartialTranscript: ((String) -> Unit)? = null): TranscriptionResult`，可选的 `onPartialTranscript` 回调能让你在转写过程中拿到中间结果。VoiceFlow 内部用它做"resend"——网络断了之后拿持久化录音重传。
+- **Preserved retry**：live session 卡住或用户主动终止时，`session.abortPreservingAudio()` 关闭 WebSocket 但保留 session 内部磁盘 PCM；之后 `client.transcribe(preservedAudio)` 用同一段 PCM 重新识别，host 不需要自己复制 mic chunk。
 
 ## 集成步骤
 
@@ -184,6 +186,33 @@ private fun stopRecording() {
         }
         eventJob?.cancel(); eventJob = null
         finalText?.let { applyTranscript(it) }
+    }
+}
+```
+
+如果你的 host UI 需要一个"强制终止语音识别 / 重试上一段录音"按钮，使用 preserved retry，不要在 app 侧重复缓存音频 chunk：
+
+```kotlin
+private var preservedAudio: VoiceFlowPreservedAudio? = null
+
+private fun abortSpeechRecognition() {
+    heartbeatJob?.cancel(); heartbeatJob = null
+    val session = this.session ?: return
+    this.session = null
+    lifecycleScope.launch {
+        microphone.stop()
+        preservedAudio = session.abortPreservingAudio()
+    }
+}
+
+private fun retryPreservedAudio() {
+    val preserved = preservedAudio ?: return
+    lifecycleScope.launch {
+        val client = makeVoiceFlowClient()
+        val result = runCatching { client.transcribe(preserved) }.getOrNull()
+        client.discardPreservedAudio(preserved)
+        preservedAudio = null
+        if (result != null) inputText = result.text
     }
 }
 ```
