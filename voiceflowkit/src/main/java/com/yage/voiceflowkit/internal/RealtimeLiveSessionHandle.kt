@@ -49,6 +49,7 @@ internal class RealtimeLiveSessionHandle(
     private var finalizeText = FinalizeTranscriptAccumulator()
     private var finalizePartialCallback: ((String) -> Unit)? = null
     private var hasPreservedAudio = false
+    private var isTerminated = false
 
     override suspend fun connectionPhase(): RealtimeConnectionPhase = mutex.withLock { phase }
 
@@ -59,7 +60,7 @@ internal class RealtimeLiveSessionHandle(
      */
     suspend fun attachInitialSession(newSession: RealtimeWebSocketSession) {
         val shouldAttach = mutex.withLock {
-            if (session != null || isRecovering) {
+            if (isTerminated || session != null || isRecovering) {
                 false
             } else {
                 isRecovering = true
@@ -90,7 +91,7 @@ internal class RealtimeLiveSessionHandle(
 
     override suspend fun appendAudioChunk(chunk: ByteArray) {
         if (chunk.isEmpty()) return
-        if (mutex.withLock { hasPreservedAudio }) return
+        if (mutex.withLock { hasPreservedAudio || isTerminated }) return
         cache.append(chunk)
         val activeSession = mutex.withLock { if (isRecovering) null else session } ?: return
         try {
@@ -103,6 +104,7 @@ internal class RealtimeLiveSessionHandle(
     }
 
     override suspend fun heartbeat() {
+        if (mutex.withLock { isTerminated }) return
         val activeSession = mutex.withLock { if (isRecovering) null else session } ?: return
         try {
             activeSession.ping()
@@ -156,6 +158,7 @@ internal class RealtimeLiveSessionHandle(
                     waitForFinalizeResult(activeSession)
                     val resolved = mutex.withLock { finalizeText.resolvedText }
                     if (resolved.trim().isNotEmpty()) {
+                        terminate(removeCache = true)
                         return resolved
                     }
                     lastError = RealtimeTranscriptionError.EmptyTranscript
@@ -186,6 +189,7 @@ internal class RealtimeLiveSessionHandle(
     override suspend fun cancel() {
         val shouldRemoveCache = mutex.withLock { !hasPreservedAudio }
         mutex.withLock {
+            isTerminated = true
             session?.close()
             session = null
             phase = RealtimeConnectionPhase.Disconnected
@@ -195,6 +199,7 @@ internal class RealtimeLiveSessionHandle(
 
     override suspend fun abortPreservingAudio(): VoiceFlowPreservedAudio? {
         mutex.withLock {
+            isTerminated = true
             session?.close()
             session = null
             isRecovering = false
@@ -210,6 +215,17 @@ internal class RealtimeLiveSessionHandle(
         }
         mutex.withLock { hasPreservedAudio = true }
         return preserved
+    }
+
+    private suspend fun terminate(removeCache: Boolean) {
+        mutex.withLock {
+            isTerminated = true
+            session?.close()
+            session = null
+            isRecovering = false
+            phase = RealtimeConnectionPhase.Disconnected
+        }
+        if (removeCache) cache.remove()
     }
 
     /** Receive a server event for state bookkeeping (called by the owning client). */
@@ -361,9 +377,9 @@ internal class RealtimeLiveSessionHandle(
      * a `RecoveryFailed` event is emitted. Port of Swift `recover`.
      */
     private suspend fun recover(reason: Throwable) {
-        if (mutex.withLock { hasPreservedAudio }) return
+        if (mutex.withLock { hasPreservedAudio || isTerminated }) return
         val oldSession = mutex.withLock {
-            if (isRecovering) return
+            if (isRecovering || isTerminated) return
             isRecovering = true
             phase = RealtimeConnectionPhase.Recovering
             val current = session

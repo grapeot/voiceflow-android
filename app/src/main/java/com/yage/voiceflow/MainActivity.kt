@@ -107,6 +107,16 @@ class MainActivity : ComponentActivity() {
         handleDeepLinkIntent(intent)
     }
 
+    override fun onStart() {
+        super.onStart()
+        viewModel.handleAppStarted()
+    }
+
+    override fun onStop() {
+        viewModel.handleAppStopped()
+        super.onStop()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)

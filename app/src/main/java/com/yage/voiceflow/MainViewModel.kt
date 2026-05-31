@@ -261,6 +261,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** True during finalize teardown; suppresses recovery-failed noise. */
     private var isTranscriptionTeardown = false
 
+    /** True after Activity ON_STOP; prevents background fallback from opening fresh sockets. */
+    private var isAppStopped = false
+
     private var pendingDeepLinkStartRecording = false
 
     /**
@@ -563,6 +566,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { startRecordingInternal() }
     }
 
+    fun handleAppStarted() {
+        isAppStopped = false
+    }
+
+    fun handleAppStopped() {
+        isAppStopped = true
+        viewModelScope.launch {
+            val wasRecording = _state.value.recordingStatus == RecordingStatus.Recording
+            if (wasRecording) {
+                stopRecordingTimer()
+                val wav = runCatching { microphone.stop() }.getOrNull()
+                if (wav != null && wav.exists() && wav.length() > 0L) {
+                    lastRecordingFile = wav
+                    _state.update {
+                        it.copy(
+                            hasRecordingFile = true,
+                            recordingStatus = RecordingStatus.Ready,
+                        )
+                    }
+                } else {
+                    wav?.let { runCatching { it.delete() } }
+                    _state.update { it.copy(recordingStatus = RecordingStatus.Idle) }
+                }
+            }
+            cancelLiveTranscriptionSession()
+        }
+    }
+
     private suspend fun startRecordingInternal() {
         // Token gate (mirrors the two iOS guards: hasToken + non-empty token).
         if (!settings.hasToken() || settings.getToken().isEmpty()) {
@@ -690,6 +721,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // write, so the animation is never truncated by the overwrite.
                 drainFinalizeTypewriter()
                 completeStopTranscriptionSuccess(streamText)
+                return
+            }
+
+            if (isAppStopped) {
+                completeStopTranscriptionFailure()
                 return
             }
 
@@ -1240,9 +1276,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         transientCaptionJob?.cancel()
         levelJob?.cancel()
         teardownFinalizeTypewriter()
-        // discard() releases the recorder and cancels the capture loop; the
-        // session's socket is torn down by the kit once its scope is gone.
+        // discard() releases the recorder and cancels the capture loop; cancel
+        // closes any live socket before the ViewModel releases its last session ref.
         microphone.discard()
+        kotlinx.coroutines.runBlocking { session?.cancel() }
         session = null
     }
 
