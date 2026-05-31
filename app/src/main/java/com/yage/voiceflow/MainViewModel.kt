@@ -251,10 +251,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** The persisted WAV of the most recent capture; drives save/resend. */
     private var lastRecordingFile: File? = null
 
-    /** Throttle state for stream-mode clipboard writes (port of iOS fields). */
-    private var lastStreamClipboardHash: Int? = null
-    private var lastStreamClipboardUpdateMs: Long? = null
-
     /** True while the user has hand-edited the transcript mid-stream. */
     private var userEditedTranscriptDuringStream = false
 
@@ -631,8 +627,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             transientCaptionJob?.cancel()
             transientCaptionJob = null
             userEditedTranscriptDuringStream = false
-            lastStreamClipboardHash = null
-            lastStreamClipboardUpdateMs = null
 
             voiceFlowClient.updateConfig(settings.buildConfig())
             val newSession = voiceFlowClient.startSession()
@@ -877,7 +871,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (_state.value.recordingStatus == RecordingStatus.Recording) return
                 if (!userEditedTranscriptDuringStream) {
                     _state.update { it.copy(transcript = event.text) }
-                    throttledStreamClipboardWrite(event.text)
                 }
             }
 
@@ -941,7 +934,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (channel == null || channel.trySend(partial).isSuccess.not()) {
             _state.update { it.copy(transcript = partial) }
         }
-        throttledStreamClipboardWrite(partial)
     }
 
     /**
@@ -1046,29 +1038,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         transientCaptionJob = viewModelScope.launch {
             delay(TRANSIENT_CAPTION_DURATION_MS)
             _state.update { it.copy(transientStreamCaptionKey = null) }
-        }
-    }
-
-    /**
-     * Throttled stream-mode clipboard write. Port of iOS
-     * `throttledStreamClipboardWrite`: skip short text, dedupe by hash, and
-     * rate-limit to once per second.
-     */
-    private fun throttledStreamClipboardWrite(text: String) {
-        val trimmed = text.trim()
-        if (trimmed.length <= 3) return
-
-        val hash = trimmed.hashCode()
-        val now = System.currentTimeMillis()
-        val lastUpdate = lastStreamClipboardUpdateMs
-        if (hash == lastStreamClipboardHash && lastUpdate != null && now - lastUpdate < 1_000) {
-            return
-        }
-        lastStreamClipboardHash = hash
-        lastStreamClipboardUpdateMs = now
-        val ok = writeToClipboard(trimmed)
-        _state.update {
-            it.copy(lastClipboardStatusKey = if (ok) "record.clipboard.copied" else "record.clipboard.failed")
         }
     }
 
