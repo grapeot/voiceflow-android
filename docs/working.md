@@ -2,6 +2,14 @@
 
 ## Changelog
 
+### 2026-05-30（VoiceFlowKit realtime session terminal teardown + app 后台清理）
+
+**问题**：`RealtimeLiveSessionHandle.finalize()` 成功返回 transcript 后没有把 live session 标成终止态，也没有主动关闭当前 WebSocket。服务端随后正常关闭连接时，`Disconnected` 事件可能在 `isFinalizing = false` 后到达，旧逻辑会把它当作录音中断线并触发 `recover()`，导致已经完成的语音 session 重新打开连接。
+
+**Kit 修复**：新增 `isTerminated` 状态。`finalize()` 成功拿到可用文本后执行 terminal teardown：关闭 socket、清空 session、清理 cache、置 phase 为 disconnected。`cancel()` / `abortPreservingAudio()` 同样置 terminal；延迟到达的 initial attach、audio append、heartbeat、recover 都尊重 terminal guard。
+
+**参考 app 修复**：`MainActivity.onStop()` 通知 ViewModel 清理活跃实时 session；录音中退后台时停止 microphone，保留可用 WAV 作为救援文件。转写中退后台时取消 live session，并禁止后台 fallback 再开新的 bulk WebSocket；用户回前台后可用 Resend 从已落盘 WAV 重转。
+
 ### 2026-05-30（VoiceFlowKit preserved audio retry API）
 
 **改动**：VoiceFlowKit facade 新增 `VoiceFlowPreservedAudio`、`VoiceFlowSession.abortPreservingAudio()`、`VoiceFlowClient.transcribe(preservedAudio, onPartialTranscript)` 和 `discardPreservedAudio(preservedAudio)`。旧 `cancel()` 继续表示取消并清理缓存；新 abort 路径只关闭当前 WebSocket，保留 session 内部 `AudioChunkCache` 的 PCM 文件，供 host 在 UI 上提供"终止识别 / 重试上一段录音"。
