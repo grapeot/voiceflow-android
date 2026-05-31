@@ -2,6 +2,14 @@
 
 ## Changelog
 
+### 2026-05-30（Stop 后完成态再写剪贴板）
+
+**问题**：参考 app 在 stream partial / finalize partial 到来时会同步更新系统剪贴板。虽然已有 1 秒节流和去重，长文本 Stop 后仍可能多次覆盖用户剪贴板。
+
+**修复**：partial 只更新转写区和 Stop 后打字机 UI，不再写剪贴板；完成路径继续复用 `copyTranscript()`，在 stream 成功、bulk fallback 成功、可用失败文本救援、Resend 完成时只写最终 transcript 一次。
+
+**验证**：随本次变更跑 app / kit JVM 测试和 debug assemble。
+
 ### 2026-05-30（VoiceFlowKit realtime session terminal teardown + app 后台清理）
 
 **问题**：`RealtimeLiveSessionHandle.finalize()` 成功返回 transcript 后没有把 live session 标成终止态，也没有主动关闭当前 WebSocket。服务端随后正常关闭连接时，`Disconnected` 事件可能在 `isFinalizing = false` 后到达，旧逻辑会把它当作录音中断线并触发 `recover()`，导致已经完成的语音 session 重新打开连接。
