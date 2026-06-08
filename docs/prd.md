@@ -170,7 +170,7 @@ VoiceFlowKit，不碰 internal 包，目的是给 host AI 一个"长什么样算
 同时本身就是一个能用的语音输入工具。
 
 应用只有两个 tab，对齐 iOS。Record tab 提供开始/停止录音、录音状态与波形
-（`WaveformView`）、转写完成后自动复制到剪贴板、左右
+（`WaveformView`）、转写完成后自动复制最终文本到剪贴板、左右
 chevron 浏览最近历史、手动复制、三点菜单里的保存录音（导出 WAV 到 app 外部目录）与重发
 录音。历史只存本机，默认保留最近若干条。Settings tab 提供 AI Builder Space API token
 输入与连接测试、默认 endpoint 说明（endpoint 固定，不可编辑）、可选 OpenCode 配置
@@ -181,8 +181,10 @@ chevron 浏览最近历史、手动复制、三点菜单里的保存录音（导
 后端，但参考 app **刻意不显示实时 partial transcript** —— 零散的实时语音会拉低识别
 质量，所以录音期间抑制后端文本输出。用户 Stop 之后才请求后端 finalize 输出，转写文字
 以**逐 delta 的打字机效果**渐进显示（来一个 delta 显示一个 delta），而不是后台累积完
-一次性整段弹出。实现细节（non-conflating channel-drain 管线绕开 StateFlow conflation）
-见 `docs/working.md` 2026-05-30 条目；前提是录音期不输出的门必须保留。
+一次性整段弹出。delta 只更新转写 UI，不触碰系统剪贴板；剪贴板只在 stream done 后的
+完成路径、bulk fallback 完成路径或可用失败文本救援路径写一次，保持和 iOS 参考 app 一致。
+实现细节（non-conflating channel-drain 管线绕开 StateFlow conflation）见 `docs/working.md`
+2026-05-30 条目；前提是录音期不输出的门必须保留。
 
 **保存录音 / 重发录音是救援手段，不被卡住状态锁死**：只要本机已经持久化过一段录音
 （最近一次 Stop 成功落盘了 WAV），三点菜单里的"保存录音"和"重发录音"就始终可用，

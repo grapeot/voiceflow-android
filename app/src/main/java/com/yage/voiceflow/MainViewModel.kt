@@ -64,6 +64,15 @@ fun applyStreamedTranscript(current: String, incoming: String): String {
 }
 
 /**
+ * Framework-free clipboard gate for transcript copy actions. Streaming deltas
+ * update UI state only; callers invoke this once from a completed/fallback path.
+ */
+internal fun copyTranscriptIfPresent(text: String, write: (String) -> Boolean): Boolean? {
+    if (text.trim().isEmpty()) return null
+    return write(text)
+}
+
+/**
  * All UI state surfaced to Compose, kept as one immutable snapshot updated via
  * `copy {}`. Direct port of the publishable surface of the iOS `AppState`
  * (+ all `AppState+*.swift` extensions).
@@ -1084,8 +1093,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun copyTranscript() {
         val text = _state.value.transcript
-        if (text.trim().isEmpty()) return
-        val ok = writeToClipboard(text)
+        val ok = copyTranscriptIfPresent(text, ::writeToClipboard) ?: return
         _state.update {
             it.copy(lastClipboardStatusKey = if (ok) "record.clipboard.copied" else "record.clipboard.failed")
         }
