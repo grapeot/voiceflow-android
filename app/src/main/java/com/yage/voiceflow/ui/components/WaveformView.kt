@@ -34,17 +34,17 @@ import kotlin.math.max
  * - [WaveformMode.Generating]: a traveling pulse that sweeps left to right,
  *   used while the backend is finalizing transcription (no mic signal).
  *
- * Geometry: 23 soft-cornered bars, visually scaled to 90% of the iOS reference
- * size while staying in the same 80dp layout slot. Each bar is centered and
- * vertically symmetric, drawn as one rounded rectangle (corner radius =
- * barWidth/2). The three-mode animation logic is unchanged from the iOS port.
- * Updates throttled to ~30Hz.
+ * Geometry: 23 soft-cornered bars, 9dp wide, 6dp spacing, in the same 80dp
+ * layout slot as iOS. Only the drawn bar height is scaled to 72%; width,
+ * spacing, and container height stay aligned with the iOS reference. Each bar
+ * is centered and vertically symmetric, drawn as one rounded rectangle (corner
+ * radius = barWidth/2). Updates throttled to ~30Hz.
  */
 enum class WaveformMode { Idle, Active, Generating }
 
 private const val BAR_COUNT = 23
 private const val FRAME_INTERVAL_SECONDS = 1.0 / 30.0
-private const val BAR_VISUAL_SCALE = 0.9f
+private const val BAR_VISUAL_SCALE = 0.72f
 
 @Composable
 fun WaveformView(
@@ -53,8 +53,8 @@ fun WaveformView(
     level: Float = 0f,
     modifier: Modifier = Modifier,
 ) {
-    val barWidthDp = 9.dp * BAR_VISUAL_SCALE
-    val barSpacingDp = 6.dp * BAR_VISUAL_SCALE
+    val barWidthDp = 9.dp
+    val barSpacingDp = 6.dp
 
     // The animation loop below runs inside a LaunchedEffect(mode) that only
     // restarts when `mode` changes. A plain capture of `level` would freeze at
