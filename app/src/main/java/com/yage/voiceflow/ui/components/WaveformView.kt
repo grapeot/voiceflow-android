@@ -35,7 +35,7 @@ import kotlin.math.max
  *   used while the backend is finalizing transcription (no mic signal).
  *
  * Geometry: 23 soft-cornered bars, 9dp wide, 6dp spacing, in the same 80dp
- * layout slot as iOS. Only the drawn bar height is scaled to 90%; width,
+ * layout slot as iOS. Only the drawn bar height is scaled to 72%; width,
  * spacing, and container height stay aligned with the iOS reference. Each bar
  * is centered and vertically symmetric, drawn as one rounded rectangle (corner
  * radius = barWidth/2). Updates throttled to ~30Hz.
@@ -44,7 +44,7 @@ enum class WaveformMode { Idle, Active, Generating }
 
 private const val BAR_COUNT = 23
 private const val FRAME_INTERVAL_SECONDS = 1.0 / 30.0
-private const val BAR_VISUAL_SCALE = 0.9f
+private const val BAR_VISUAL_SCALE = 0.72f
 
 @Composable
 fun WaveformView(
