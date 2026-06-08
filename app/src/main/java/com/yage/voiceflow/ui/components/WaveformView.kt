@@ -34,17 +34,17 @@ import kotlin.math.max
  * - [WaveformMode.Generating]: a traveling pulse that sweeps left to right,
  *   used while the backend is finalizing transcription (no mic signal).
  *
- * Geometry: 23 soft-cornered bars, 9dp wide, 6dp spacing, 80dp tall, centered
- * and vertically symmetric, each a single rounded rectangle (corner radius =
- * barWidth/2) — matching iOS's final waveform look. 23 bars (23*9 + 22*6 =
- * 339dp) fit inside the screen's content width without overflowing. The
- * three-mode animation logic is unchanged from the iOS port. Updates throttled
- * to ~30Hz.
+ * Geometry: 23 soft-cornered bars, visually scaled to 90% of the iOS reference
+ * size while staying in the same 80dp layout slot. Each bar is centered and
+ * vertically symmetric, drawn as one rounded rectangle (corner radius =
+ * barWidth/2). The three-mode animation logic is unchanged from the iOS port.
+ * Updates throttled to ~30Hz.
  */
 enum class WaveformMode { Idle, Active, Generating }
 
 private const val BAR_COUNT = 23
 private const val FRAME_INTERVAL_SECONDS = 1.0 / 30.0
+private const val BAR_VISUAL_SCALE = 0.9f
 
 @Composable
 fun WaveformView(
@@ -53,8 +53,8 @@ fun WaveformView(
     level: Float = 0f,
     modifier: Modifier = Modifier,
 ) {
-    val barWidthDp = 9.dp
-    val barSpacingDp = 6.dp
+    val barWidthDp = 9.dp * BAR_VISUAL_SCALE
+    val barSpacingDp = 6.dp * BAR_VISUAL_SCALE
 
     // The animation loop below runs inside a LaunchedEffect(mode) that only
     // restarts when `mode` changes. A plain capture of `level` would freeze at
@@ -133,6 +133,7 @@ fun WaveformView(
             color = color.copy(alpha = color.alpha * canvasOpacity),
             barWidthPx = barWidthPx,
             barSpacingPx = barSpacingPx,
+            barHeightScale = BAR_VISUAL_SCALE,
         )
     }
 }
@@ -142,6 +143,7 @@ private fun DrawScope.drawBars(
     color: Color,
     barWidthPx: Float,
     barSpacingPx: Float,
+    barHeightScale: Float,
 ) {
     val centerY = size.height / 2f
     val total = BAR_COUNT * barWidthPx + (BAR_COUNT - 1) * barSpacingPx
@@ -155,7 +157,7 @@ private fun DrawScope.drawBars(
     for (i in 0 until BAR_COUNT) {
         val barX = originX + i * (barWidthPx + barSpacingPx)
         // height = level * (height - 4) + 2, clamped to at least 1px.
-        val rawHeight = bars[i] * (size.height - 4f) + 2f
+        val rawHeight = (bars[i] * (size.height - 4f) + 2f) * barHeightScale
         val barHeight = max(rawHeight, 1f)
 
         drawRoundRect(
