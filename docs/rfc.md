@@ -230,7 +230,9 @@ internal constructor 接受注入，public constructor 默认 new prod 实现。
      textDelta 被抑制以避免零散语音拉低识别质量，只有 Stop 后 finalize 期才逐个回调
      delta。**库每个 delta 回调一次**，逐 delta 打字机的责任在 app 层 —— app 必须把
      这些回调按序喂给 UI 而不能让 conflating StateFlow 把中间快照吞掉（参考 app 的
-     channel-drain 管线见 `docs/working.md` 2026-05-30 条目）。
+     channel-drain 管线见 `docs/working.md` 2026-05-30 条目）。这些 delta 回调不得写
+     系统剪贴板；参考 app 只在 `finalize` 返回最终文本、bulk fallback 返回最终文本、
+     或失败救援路径确认当前文本可用后调用一次 `copyTranscript()`。
    - `abortPreservingAudio()`：关闭当前 WebSocket、停止 recovery、保留 `AudioChunkCache`
      的 PCM 文件并返回 `VoiceFlowPreservedAudio`。旧 `cancel()` 语义保持不变，仍会删除缓存。
    - `attachInitialSession(session)`：初始连接先 replay 再 attach。

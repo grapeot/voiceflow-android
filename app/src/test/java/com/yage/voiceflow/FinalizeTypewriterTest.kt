@@ -111,4 +111,38 @@ class FinalizeTypewriterTest {
 
         assertEquals(listOf("hi", "hi there"), emissions)
     }
+
+    @Test
+    fun `finalize deltas update transcript but clipboard writes only once after final text`() {
+        var transcript = ""
+        val writes = mutableListOf<String>()
+
+        listOf("h", "he", "hel", "hell", "hello").forEach { partial ->
+            transcript = applyStreamedTranscript(transcript, partial)
+        }
+
+        assertEquals("hello", transcript)
+        assertEquals(emptyList<String>(), writes)
+
+        val copied = copyTranscriptIfPresent(transcript) { text ->
+            writes.add(text)
+            true
+        }
+
+        assertEquals(true, copied)
+        assertEquals(listOf("hello"), writes)
+    }
+
+    @Test
+    fun `blank transcript skips clipboard writes`() {
+        val writes = mutableListOf<String>()
+
+        val copied = copyTranscriptIfPresent("  \n") { text ->
+            writes.add(text)
+            true
+        }
+
+        assertEquals(null, copied)
+        assertEquals(emptyList<String>(), writes)
+    }
 }

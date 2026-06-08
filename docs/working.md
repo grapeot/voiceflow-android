@@ -2,6 +2,12 @@
 
 ## Changelog
 
+### 2026-06-07（剪贴板写入契约回归测试）
+
+**确认**：参考 app 的 stream / finalize delta 路径只更新转写 UI；`copyTranscript()` 只从 stream 成功、bulk fallback 成功、可用失败文本救援和 Resend 完成这些终态路径触发，行为与 iOS 参考 app 保持一致。
+
+**改动**：把 transcript clipboard gate 抽成 framework-free helper，并新增 JVM 回归测试，验证多次 finalize delta 不写剪贴板，最终文本只写一次；PRD/RFC 同步明确 delta 不触碰系统剪贴板。
+
 ### 2026-05-30（Stop 后完成态再写剪贴板）
 
 **问题**：参考 app 在 stream partial / finalize partial 到来时会同步更新系统剪贴板。虽然已有 1 秒节流和去重，长文本 Stop 后仍可能多次覆盖用户剪贴板。
