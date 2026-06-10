@@ -28,10 +28,12 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -84,6 +86,14 @@ fun RecordScreen(
     modifier: Modifier = Modifier,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val transcriptScrollState = rememberScrollState()
+
+    LaunchedEffect(state.transcript.length, state.recordingStatus) {
+        if (state.recordingStatus == RecordingStatus.Transcribing && state.transcript.isNotEmpty()) {
+            withFrameNanos { }
+            transcriptScrollState.scrollTo(transcriptScrollState.maxValue)
+        }
+    }
 
     Box(
         modifier = modifier
@@ -132,8 +142,8 @@ fun RecordScreen(
                     .weight(1f)
                     .fillMaxWidth()
                     .padding(horizontal = DesignTokens.Spacing.xl)
-                    .verticalScroll(rememberScrollState()),
-                contentAlignment = Alignment.Center,
+                    .verticalScroll(transcriptScrollState),
+                contentAlignment = if (state.transcript.isEmpty()) Alignment.Center else Alignment.TopStart,
             ) {
                 BasicTextField(
                     value = state.transcript,

@@ -2,6 +2,14 @@
 
 ## Changelog
 
+### 2026-06-09（长转写自动跟随底部）
+
+**问题**：Stop 后逐 delta 打字机输出长文本时，转写区使用 `verticalScroll(rememberScrollState())`，但 scroll state 没有保存，也没有随 transcript 增长滚到底部。用户说很多话时，文本继续生成但视口停在旧位置。
+
+**修复**：`RecordScreen` hoist `transcriptScrollState`，在 `RecordingStatus.Transcribing` 且 transcript 非空时按文本长度变化 `scrollTo(maxValue)`。使用即时滚动而不是逐 delta 动画，避免 12ms 打字机更新不断取消动画造成抖动。
+
+**闪烁/跳动控制**：非空 transcript 从顶部开始布局，placeholder 仍居中。这样短文本增长到多行时不会继续以容器中心为锚点重排，减少无滚动阶段的视觉闪动。
+
 ### 2026-06-07（剪贴板写入契约回归测试）
 
 **确认**：参考 app 的 stream / finalize delta 路径只更新转写 UI；`copyTranscript()` 只从 stream 成功、bulk fallback 成功、可用失败文本救援和 Resend 完成这些终态路径触发，行为与 iOS 参考 app 保持一致。
