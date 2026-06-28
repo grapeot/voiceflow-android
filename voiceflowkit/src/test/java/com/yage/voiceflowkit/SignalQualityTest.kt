@@ -15,8 +15,8 @@ import kotlin.math.sin
 class SignalQualityTest {
 
     // Mirror of app's SignalQualityConfig constants for tier tests.
-    private val speechThreshold = 0.008f
-    private val activeAudioTier1Ms = 100.0
+    private val speechThreshold = 0.015f
+    private val activeAudioTier1Ms = 300.0
     private val activeAudioShortMs = 1500.0
 
     // Mirror of app's SignalTier enum for tier tests.
@@ -76,7 +76,8 @@ class SignalQualityTest {
 
     @Test
     fun tier1WithSmallNoiseButNoSpeech() {
-        assertEquals(SignalTier.Tier1NoSignal, evaluateSignalTier(50.0))
+        // A few noise-floor chunks (~170ms) still below the 300ms Tier 1 cutoff
+        assertEquals(SignalTier.Tier1NoSignal, evaluateSignalTier(170.0))
     }
 
     @Test

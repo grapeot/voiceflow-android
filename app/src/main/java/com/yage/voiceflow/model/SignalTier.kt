@@ -21,8 +21,8 @@ enum class SignalTier {
  * Signal quality detection thresholds. Tuned to match the iOS app.
  */
 object SignalQualityConfig {
-    const val SPEECH_THRESHOLD = 0.008f
-    const val ACTIVE_AUDIO_TIER1_MS = 100.0
+    const val SPEECH_THRESHOLD = 0.015f
+    const val ACTIVE_AUDIO_TIER1_MS = 300.0
     const val ACTIVE_AUDIO_SHORT_MS = 1500.0
     const val SIGNAL_BANNER_GRACE_MS = 300L
 }
