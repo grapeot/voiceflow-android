@@ -2,6 +2,15 @@
 
 ## Changelog
 
+### 2026-06-28
+
+- 新增信号质量门控（signal quality gate），对齐 iOS PR #62。解决静音录音时 OpenAI Realtime 幻觉转写的问题。核心机制：在 `microphone.start` 的 `onPCMChunk` 回调里用 `VoiceFlowAudioMetering.rmsLevel()` 累加 `peakRms` 和 `activeAudioMs`。Stop 时按三档置信度决定行为：Tier 1（`activeAudioMs < 100ms`，无信号）不发 `commitAndStop`，弹 alert，幻觉从源头消失；Tier 2（`activeAudioMs < 1500ms`，短音频）正常 commit，transcript 上方挂持久弱警告文字（`textSecondary` 色 + `caption` 字号，无背景块，对齐 design.md 的"无边框、无卡片"原则）；Tier 3（`activeAudioMs >= 1500ms`，正常）无提示。录音中还有一层实时反馈：grace window 后如果 `activeAudioMs < 1`，caption 显示"未检测到声音输入"，检测到信号后清除。
+- `VoiceFlowAudioMetering` 新增 `rmsLevel()` public helper（raw RMS，不做 dB 映射）。`normalizedLevel()` 改为内部调用 `rmsLevel()` 复用计算。
+- `UiState` 新增 `peakRms`/`activeAudioMs`/`signalTier`/`showTranscriptWarning` 字段。`StreamCaptionKey` 新增 `NO_SIGNAL_LIVE`。新增 `SignalTier` enum 和 `SignalQualityConfig` 常量对象。`MainViewModel` 新增 `evaluateSignalTier()`/`startSignalBannerGraceTimer()`，`stopRecording()` 加 Tier 1 gate。
+- `RecordScreen` transcript 区从 `Box` 改为 `Column`，Tier 2 时在 transcript 上方显示警告文字（`textSecondary` 色，`caption` 字号，`xl` horizontal padding 对齐 transcript）。
+- 新增中英文 strings：`record_signal_noSignal`/`record_signal_noSignalLive`/`record_signal_shortRecording`。
+- 新增 `SignalQualityTest`：8 个 JVM 单元测试（RMS helper 3 个 + tier 判定 5 个）。
+
 ### 2026-06-09（长转写自动跟随底部）
 
 **问题**：Stop 后逐 delta 打字机输出长文本时，转写区使用 `verticalScroll(rememberScrollState())`，但 scroll state 没有保存，也没有随 transcript 增长滚到底部。用户说很多话时，文本继续生成但视口停在旧位置。

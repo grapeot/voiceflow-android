@@ -50,6 +50,9 @@
     <string name="record_error_streamDisconnected">Stream disconnected.</string>
     <string name="record_error_alert_title">Recording Error</string>
     <string name="record_error_alert_ok">OK</string>
+    <string name="record_signal_noSignal">Recording captured no audio at all. Please check your microphone access and try again.</string>
+    <string name="record_signal_noSignalLive">No audio input detected. Make sure your microphone is allowed, or wait for the waveform to move before speaking.</string>
+    <string name="record_signal_shortRecording">Recording was too short. The transcript may not be accurate.</string>
 
     <string name="record_clipboard_copied">Copied to clipboard.</string>
     <string name="record_clipboard_failed">Could not copy to clipboard.</string>
