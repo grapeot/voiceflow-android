@@ -9,4 +9,5 @@ object StreamCaptionKey {
     const val RECONNECTING = "record.status.reconnecting"
     const val RECONNECTED = "record.status.reconnected"
     const val STREAM_DISCONNECTED = "record.error.streamDisconnected"
+    const val NO_SIGNAL_LIVE = "record.signal.noSignalLive"
 }

@@ -30,13 +30,12 @@ object VoiceFlowAudioMetering {
     private const val TAIL_SCALE = 0.9
 
     /**
-     * Compute a 0..1 level from a PCM16 little-endian chunk.
-     *
-     * Returns `0f` for an empty chunk (or one with fewer than 2 bytes).
-     * A trailing odd byte, if present, is ignored — only whole samples
-     * contribute to the RMS.
+     * Compute raw RMS (0..1) from a PCM16 little-endian chunk.
+     * Unlike [normalizedLevel], this is the untransformed RMS —
+     * useful for signal-quality detection where dB remapping would
+     * compress the low end.
      */
-    fun normalizedLevel(pcm16le: ByteArray): Float {
+    fun rmsLevel(pcm16le: ByteArray): Float {
         val sampleCount = pcm16le.size / 2
         if (sampleCount <= 0) return 0f
 
@@ -47,7 +46,21 @@ object VoiceFlowAudioMetering {
             accumulator += sample * sample
         }
 
-        val rms = sqrt(accumulator / sampleCount)
+        return sqrt(accumulator / sampleCount).toFloat()
+    }
+
+    /**
+     * Compute a 0..1 level from a PCM16 little-endian chunk.
+     *
+     * Returns `0f` for an empty chunk (or one with fewer than 2 bytes).
+     * A trailing odd byte, if present, is ignored — only whole samples
+     * contribute to the RMS.
+     */
+    fun normalizedLevel(pcm16le: ByteArray): Float {
+        val sampleCount = pcm16le.size / 2
+        if (sampleCount <= 0) return 0f
+
+        val rms = rmsLevel(pcm16le).toDouble()
         val db = 20.0 * log10(max(rms, 1e-7))
         val normalized = (db - MIN_DB) / (MAX_DB - MIN_DB)
         val scaled = normalized * TAIL_SCALE

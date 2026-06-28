@@ -17,9 +17,12 @@ import com.yage.voiceflow.model.RecordingStatus
 import com.yage.voiceflow.model.RecordingTimerFormatter
 import com.yage.voiceflow.model.SavedRecordingInfo
 import com.yage.voiceflow.model.StreamCaptionKey
+import com.yage.voiceflow.model.SignalTier
+import com.yage.voiceflow.model.SignalQualityConfig
 import com.yage.voiceflow.model.TranscriptHistory
 import com.yage.voiceflow.service.OpenCodeClient
 import com.yage.voiceflow.service.OpenCodeClientError
+import com.yage.voiceflowkit.VoiceFlowAudioMetering
 import com.yage.voiceflowkit.VoiceFlowClient
 import com.yage.voiceflowkit.VoiceFlowConfig
 import com.yage.voiceflowkit.VoiceFlowConnectionPhase
@@ -130,10 +133,19 @@ data class UiState(
 
     // --- Language ---
     val language: AppLanguage = AppLanguage.System,
+
+    // --- Signal quality detection ---
+    val peakRms: Float = 0f,
+    val activeAudioMs: Double = 0.0,
+    val signalTier: SignalTier? = null,
 ) {
     /** Transient layer wins; once it clears, the persistent layer shows through. */
     val streamStatusCaptionKey: String?
         get() = transientStreamCaptionKey ?: persistentStreamCaptionKey
+
+    /** True when the last recording was Tier 2 (short audio) and the transcript is ready. */
+    val showTranscriptWarning: Boolean
+        get() = signalTier == SignalTier.Tier2ShortAudio && recordingStatus == RecordingStatus.Ready
 
     // --- Derived gating (ports of the AppState computed `can*` properties) ---
 
@@ -270,6 +282,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var isAppStopped = false
 
     private var pendingDeepLinkStartRecording = false
+
+    // --- Signal quality detection (accumulated during recording) ---
+    private var peakRms: Float = 0f
+    private var activeAudioMs: Double = 0.0
+    private var signalBannerGraceJob: Job? = null
 
     /**
      * Suspend callback supplied by the Activity (which owns the RECORD_AUDIO
@@ -645,7 +662,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             startLiveEventConsumer(newSession)
             startStreamHeartbeat(newSession)
 
+            // Reset signal detection state for the new session.
+            peakRms = 0f
+            activeAudioMs = 0.0
+            signalBannerGraceJob?.cancel()
+            signalBannerGraceJob = null
+
             microphone.start(persist = true) { chunk ->
+                // Signal quality detection: accumulate peakRms and activeAudioMs.
+                val rawRms = VoiceFlowAudioMetering.rmsLevel(chunk)
+                if (rawRms > peakRms) peakRms = rawRms
+                if (rawRms >= SignalQualityConfig.SPEECH_THRESHOLD) {
+                    val sampleCount = chunk.size / 2
+                    activeAudioMs += sampleCount.toDouble() / 24000.0 * 1000.0
+                    if (_state.value.persistentStreamCaptionKey == StreamCaptionKey.NO_SIGNAL_LIVE) {
+                        setPersistentStreamCaption(null)
+                    }
+                }
                 // Forward each PCM chunk; launched so the capture callback never
                 // blocks. Audio level comes from microphone.audioLevel, so we do
                 // not meter here (unlike iOS which taps the chunk for level).
@@ -654,7 +687,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             resetRecordingTimer()
             startRecordingTimer()
-            _state.update { it.copy(recordingStatus = RecordingStatus.Recording) }
+            _state.update {
+                it.copy(
+                    recordingStatus = RecordingStatus.Recording,
+                    peakRms = 0f,
+                    activeAudioMs = 0.0,
+                    signalTier = null,
+                )
+            }
+            startSignalBannerGraceTimer()
         } catch (t: Throwable) {
             cancelLiveTranscriptionSession()
             resetRecordingTimer()
@@ -665,6 +706,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun stopRecording() {
         if (_state.value.recordingStatus != RecordingStatus.Recording) return
         stopRecordingTimer()
+        signalBannerGraceJob?.cancel()
+        signalBannerGraceJob = null
         _state.update { it.copy(recordingStatus = RecordingStatus.Transcribing) }
         viewModelScope.launch {
             val wav: File?
@@ -681,6 +724,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 wav?.let { runCatching { it.delete() } }
                 cancelLiveTranscriptionSession()
                 presentRecordError("record.error.transcriptionFailed")
+                return@launch
+            }
+
+            // Signal quality gate: evaluate before committing.
+            val tier = evaluateSignalTier()
+            _state.update { it.copy(signalTier = tier) }
+
+            if (tier == SignalTier.Tier1NoSignal) {
+                // Don't commit — OpenAI would hallucinate on empty audio.
+                wav.let { runCatching { it.delete() } }
+                cancelLiveTranscriptionSession()
+                resetRecordingTimer()
+                _state.update { it.copy(audioLevel = 0f) }
+                presentRecordError("record.signal.noSignal")
                 return@launch
             }
 
@@ -1075,6 +1132,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun stopRecordingTimer() {
         timerJob?.cancel()
         timerJob = null
+    }
+
+    // endregion
+
+    // region Signal quality gate (port of iOS evaluateSignalTier + grace timer)
+
+    /**
+     * Evaluate signal quality from accumulated peakRms and activeAudioMs.
+     * Called at Stop time before committing audio.
+     */
+    private fun evaluateSignalTier(): SignalTier {
+        // Tier 1: no speech detected at all. Check activeAudioMs rather
+        // than peakRms alone — Android mic noise floor can push peakRms
+        // above silenceFloor even when the user never spoke.
+        if (activeAudioMs < SignalQualityConfig.ACTIVE_AUDIO_TIER1_MS) {
+            return SignalTier.Tier1NoSignal
+        }
+        if (activeAudioMs < SignalQualityConfig.ACTIVE_AUDIO_SHORT_MS) {
+            return SignalTier.Tier2ShortAudio
+        }
+        return SignalTier.Tier3Normal
+    }
+
+    /**
+     * Start a grace timer; if no speech is detected after the grace window,
+     * show a live "no signal" caption to warn the user mid-recording.
+     */
+    private fun startSignalBannerGraceTimer() {
+        signalBannerGraceJob?.cancel()
+        signalBannerGraceJob = viewModelScope.launch {
+            delay(SignalQualityConfig.SIGNAL_BANNER_GRACE_MS)
+            if (_state.value.recordingStatus != RecordingStatus.Recording) return@launch
+            if (activeAudioMs < 1.0) {
+                setPersistentStreamCaption(StreamCaptionKey.NO_SIGNAL_LIVE)
+            }
+        }
     }
 
     // endregion

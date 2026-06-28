@@ -48,6 +48,9 @@
     <string name="record_error_streamDisconnected">流已断开。</string>
     <string name="record_error_alert_title">录音出错</string>
     <string name="record_error_alert_ok">好</string>
+    <string name="record_signal_noSignal">录音未捕获到任何声音。请检查麦克风权限后重新录音。</string>
+    <string name="record_signal_noSignalLive">未检测到声音输入。请确认麦克风已授权，或等波形跳动后再开始说话。</string>
+    <string name="record_signal_shortRecording">录音时长过短，转写结果可能不准确。</string>
 
     <string name="record_clipboard_copied">已复制到剪贴板。</string>
     <string name="record_clipboard_failed">无法复制到剪贴板。</string>

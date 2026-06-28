@@ -137,32 +137,46 @@ fun RecordScreen(
             Spacer(Modifier.height(DesignTokens.Spacing.xxl))
 
             // --- Editable transcript with centered placeholder ---
-            Box(
+            Column(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
                     .padding(horizontal = DesignTokens.Spacing.xl)
                     .verticalScroll(transcriptScrollState),
-                contentAlignment = if (state.transcript.isEmpty()) Alignment.Center else Alignment.TopStart,
             ) {
-                BasicTextField(
-                    value = state.transcript,
-                    onValueChange = viewModel::onTranscriptEdited,
-                    textStyle = DesignTokens.Typography.body.copy(color = DesignTokens.Palette.textPrimary),
-                    cursorBrush = SolidColor(DesignTokens.Palette.accent),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (state.transcript.isEmpty()) {
-                    // Centered to stay symmetric with the timer/waveform above;
-                    // a left-aligned placeholder reads as orphaned (matches the
-                    // iOS rationale in RecordView).
+                if (state.showTranscriptWarning) {
                     Text(
-                        text = stringRes(R.string.record_transcript_placeholder),
-                        color = DesignTokens.Palette.textTertiary,
-                        textAlign = TextAlign.Center,
-                        style = DesignTokens.Typography.body,
+                        text = stringRes(R.string.record_signal_shortRecording),
+                        color = DesignTokens.Palette.textSecondary,
+                        style = DesignTokens.Typography.caption,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = DesignTokens.Spacing.s),
+                    )
+                }
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = if (state.transcript.isEmpty()) Alignment.Center else Alignment.TopStart,
+                ) {
+                    BasicTextField(
+                        value = state.transcript,
+                        onValueChange = viewModel::onTranscriptEdited,
+                        textStyle = DesignTokens.Typography.body.copy(color = DesignTokens.Palette.textPrimary),
+                        cursorBrush = SolidColor(DesignTokens.Palette.accent),
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    if (state.transcript.isEmpty()) {
+                        // Centered to stay symmetric with the timer/waveform above;
+                        // a left-aligned placeholder reads as orphaned (matches the
+                        // iOS rationale in RecordView).
+                        Text(
+                            text = stringRes(R.string.record_transcript_placeholder),
+                            color = DesignTokens.Palette.textTertiary,
+                            textAlign = TextAlign.Center,
+                            style = DesignTokens.Typography.body,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                 }
             }
 
