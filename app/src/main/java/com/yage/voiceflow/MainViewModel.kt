@@ -29,6 +29,7 @@ import com.yage.voiceflowkit.VoiceFlowConnectionPhase
 import com.yage.voiceflowkit.VoiceFlowError
 import com.yage.voiceflowkit.VoiceFlowEvent
 import com.yage.voiceflowkit.VoiceFlowMicrophone
+import com.yage.voiceflowkit.VoiceFlowRecordingStrategy
 import com.yage.voiceflowkit.VoiceFlowSession
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -130,6 +131,7 @@ data class UiState(
     // --- Transcription settings ---
     val prompt: String = "",
     val terms: String = "",
+    val recordingStrategy: VoiceFlowRecordingStrategy = VoiceFlowRecordingStrategy.OPENAI_REALTIME,
 
     // --- Language ---
     val language: AppLanguage = AppLanguage.System,
@@ -272,6 +274,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** The persisted WAV of the most recent capture; drives save/resend. */
     private var lastRecordingFile: File? = null
 
+    /** Strategy that produced [lastRecordingFile]; resend must not use the current picker. */
+    private var lastRecordingStrategy: VoiceFlowRecordingStrategy =
+        VoiceFlowRecordingStrategy.OPENAI_REALTIME
+
+    /** Snapshot of Settings strategy for the in-flight recording. */
+    private var activeRecordingStrategy: VoiceFlowRecordingStrategy =
+        VoiceFlowRecordingStrategy.OPENAI_REALTIME
+
     /** True while the user has hand-edited the transcript mid-stream. */
     private var userEditedTranscriptDuringStream = false
 
@@ -336,6 +346,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 openCodeConnectionStatus = openCodeConnectionStatus,
                 prompt = settings.prompt,
                 terms = settings.termsRaw,
+                recordingStrategy = settings.recordingStrategy,
                 language = settings.language,
             )
         }
@@ -418,6 +429,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun updateTerms(value: String) {
         settings.termsRaw = value
         _state.update { it.copy(terms = value) }
+    }
+
+    fun updateRecordingStrategy(strategy: VoiceFlowRecordingStrategy) {
+        settings.recordingStrategy = strategy
+        _state.update { it.copy(recordingStrategy = strategy) }
     }
 
     fun updateLanguage(language: AppLanguage) {
@@ -655,12 +671,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             userEditedTranscriptDuringStream = false
 
             voiceFlowClient.updateConfig(settings.buildConfig())
-            val newSession = voiceFlowClient.startSession()
-            session = newSession
-            // Start the event consumer immediately so the earliest PhaseChanged
-            // is caught before mic.start (the SharedFlow has replay=0).
-            startLiveEventConsumer(newSession)
-            startStreamHeartbeat(newSession)
+            activeRecordingStrategy = settings.recordingStrategy
+            val strategy = activeRecordingStrategy
 
             // Reset signal detection state for the new session.
             peakRms = 0f
@@ -668,7 +680,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             signalBannerGraceJob?.cancel()
             signalBannerGraceJob = null
 
-            microphone.start(persist = true) { chunk ->
+            val liveSession: VoiceFlowSession? =
+                if (strategy.usesRealtimeTransport) {
+                    val newSession = voiceFlowClient.startSession()
+                    session = newSession
+                    // Start the event consumer immediately so the earliest PhaseChanged
+                    // is caught before mic.start (the SharedFlow has replay=0).
+                    startLiveEventConsumer(newSession)
+                    startStreamHeartbeat(newSession)
+                    newSession
+                } else {
+                    session = null
+                    null
+                }
+
+            microphone.start(strategy = strategy, persist = true) { chunk ->
                 // Signal quality detection: accumulate peakRms and activeAudioMs.
                 val rawRms = VoiceFlowAudioMetering.rmsLevel(chunk)
                 if (rawRms > peakRms) peakRms = rawRms
@@ -679,10 +705,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         setPersistentStreamCaption(null)
                     }
                 }
-                // Forward each PCM chunk; launched so the capture callback never
-                // blocks. Audio level comes from microphone.audioLevel, so we do
-                // not meter here (unlike iOS which taps the chunk for level).
-                viewModelScope.launch { runCatching { newSession.sendAudioChunk(chunk) } }
+                // OpenAI only: forward PCM live. Grok Batch never opens a session.
+                val active = liveSession
+                if (active != null) {
+                    viewModelScope.launch { runCatching { active.sendAudioChunk(chunk) } }
+                }
             }
 
             resetRecordingTimer()
@@ -690,6 +717,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _state.update {
                 it.copy(
                     recordingStatus = RecordingStatus.Recording,
+                    // Grok has no WebSocket; show active accent immediately.
+                    streamConnectionPhase = if (strategy.usesRealtimeTransport) {
+                        VoiceFlowConnectionPhase.Connecting
+                    } else {
+                        VoiceFlowConnectionPhase.Connected
+                    },
                     peakRms = 0f,
                     activeAudioMs = 0.0,
                     signalTier = null,
@@ -742,8 +775,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             lastRecordingFile = wav
+            lastRecordingStrategy = activeRecordingStrategy
             _state.update { it.copy(hasRecordingFile = true) }
-            finishLiveTranscriptionSession()
+            if (activeRecordingStrategy.usesRealtimeTransport) {
+                finishLiveTranscriptionSession()
+            } else {
+                finishGrokBatchTranscription()
+            }
+        }
+    }
+
+    /**
+     * Grok Batch path: no live session. Upload the local capture after Stop.
+     */
+    private suspend fun finishGrokBatchTranscription() {
+        isTranscriptionTeardown = true
+        try {
+            val text = finishTranscriptionFromLastRecording(presentErrorOnFailure = false)
+            if (text != null && isUsableTranscript(text)) {
+                completeStopTranscriptionSuccess(text)
+            } else {
+                completeStopTranscriptionFailure()
+            }
+        } finally {
+            isTranscriptionTeardown = false
         }
     }
 
@@ -819,8 +874,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         return try {
             voiceFlowClient.updateConfig(settings.buildConfig())
-            val result = voiceFlowClient.transcribe(wavFile = file) { partial ->
-                _state.update { it.copy(transcript = partial) }
+            val strategy = lastRecordingStrategy
+            val result = voiceFlowClient.transcribe(
+                audioFile = file,
+                strategy = strategy,
+            ) { partial ->
+                if (strategy.usesRealtimeTransport) {
+                    _state.update { it.copy(transcript = partial) }
+                }
             }
             result.text
         } catch (t: Throwable) {
@@ -907,6 +968,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 lastRecordingFile = wav
+                lastRecordingStrategy = activeRecordingStrategy
                 _state.update { it.copy(hasRecordingFile = true) }
                 cancelLiveTranscriptionSession()
             }

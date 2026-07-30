@@ -1,5 +1,7 @@
 package com.yage.voiceflowkit
 
+import com.yage.voiceflowkit.internal.GrokBatchTranscribing
+import com.yage.voiceflowkit.internal.GrokBatchTranscriptionClient
 import com.yage.voiceflowkit.internal.MockRealtimeTranscriptionClient
 import com.yage.voiceflowkit.internal.Pcm16WavWriter
 import com.yage.voiceflowkit.internal.RealtimeSessionContext
@@ -15,45 +17,32 @@ import java.util.UUID
  * Public entry point for VoiceFlowKit. Holds the config (endpoint, token
  * provider, optional prompt/terms) and creates sessions.
  *
- * Sessions are independent — you can start, stop, cancel, restart in
- * any order. The client itself is cheap; it's safe to construct one
- * per host-side controller or share a single instance.
- *
- * VoiceFlowKit V0 wraps the internal [RealtimeTranscribing] implementation.
- * Tests can inject a custom transcriber via the internal constructor.
- *
- * The Swift source models this as an `actor`. On Android we use a plain
- * class guarded by an internal [Mutex] so that config reads/writes are
- * serialized just like actor-isolated state.
+ * Supports two complete recording strategies:
+ * - [VoiceFlowRecordingStrategy.OPENAI_REALTIME]: live WebSocket path
+ * - [VoiceFlowRecordingStrategy.GROK_BATCH]: file upload after Stop
  */
 class VoiceFlowClient internal constructor(
     config: VoiceFlowConfig,
     private val transcriber: RealtimeTranscribing,
+    private val grokTranscriber: GrokBatchTranscribing,
 ) {
-    /** Serializes access to [config] so reads/writes don't race. */
     private val configMutex = Mutex()
     private var config: VoiceFlowConfig = config
 
-    /**
-     * Production constructor. Wires up the real WebSocket-backed
-     * transcription pipeline.
-     */
-    constructor(config: VoiceFlowConfig) : this(config, RealtimeTranscriptionClient())
+    constructor(config: VoiceFlowConfig) : this(
+        config = config,
+        transcriber = RealtimeTranscriptionClient(),
+        grokTranscriber = GrokBatchTranscriptionClient(),
+    )
 
-    /** Replace the entire config. Effective on the next call. */
     suspend fun updateConfig(config: VoiceFlowConfig) {
         configMutex.withLock {
             this.config = config
         }
     }
 
-    /** Current config (read-only view for hosts that need to inspect). */
     suspend fun currentConfig(): VoiceFlowConfig = configMutex.withLock { config }
 
-    /**
-     * Start a realtime session. Host then pumps PCM chunks in,
-     * optionally pings, and finalizes with [VoiceFlowSession.commitAndStop].
-     */
     suspend fun startSession(): VoiceFlowSession {
         val snapshot = configMutex.withLock { config }
         val token = currentToken(snapshot)
@@ -74,43 +63,73 @@ class VoiceFlowClient internal constructor(
     }
 
     /**
-     * One-shot transcription of an existing WAV file. Internally feeds the
-     * PCM through the same realtime WS pipeline, gathers partial deltas,
-     * and returns the final string.
-     *
-     * V0 only supports WAV input here — this matches what VoiceFlow's
-     * resend path uses.
+     * One-shot transcription of an existing audio file using the OpenAI realtime
+     * bulk path. Prefer [transcribe] with an explicit strategy when the file may
+     * come from Grok Batch capture.
      */
     suspend fun transcribe(
         wavFile: File,
         onPartialTranscript: ((String) -> Unit)? = null,
+    ): TranscriptionResult =
+        transcribe(
+            audioFile = wavFile,
+            strategy = VoiceFlowRecordingStrategy.OPENAI_REALTIME,
+            onPartialTranscript = onPartialTranscript,
+        )
+
+    /**
+     * Strategy-aware file transcription.
+     *
+     * - [VoiceFlowRecordingStrategy.OPENAI_REALTIME]: reads PCM from WAV and
+     *   runs the bulk realtime pipeline (partials supported).
+     * - [VoiceFlowRecordingStrategy.GROK_BATCH]: multipart upload to
+     *   `/v1/audio/grok-transcription` (no partials; terms only, no prompt).
+     */
+    suspend fun transcribe(
+        audioFile: File,
+        strategy: VoiceFlowRecordingStrategy,
+        onPartialTranscript: ((String) -> Unit)? = null,
     ): TranscriptionResult {
         val snapshot = configMutex.withLock { config }
         val token = currentToken(snapshot)
-        val pcm: ByteArray = try {
-            Pcm16WavWriter.readPcm(wavFile)
-        } catch (t: Throwable) {
-            throw VoiceFlowError.AudioConversionFailed
-        }
-        try {
-            val text = transcriber.transcribeBulkPcm(
-                pcm = pcm,
-                baseURL = snapshot.endpoint,
-                token = token,
-                model = snapshot.model,
-                context = RealtimeSessionContext(prompt = snapshot.prompt, terms = snapshot.terms),
-                onPartialTranscript = onPartialTranscript,
-            )
-            return TranscriptionResult(text = text, requestId = UUID.randomUUID().toString())
-        } catch (realtime: RealtimeTranscriptionError) {
-            throw VoiceFlowError.from(realtime)
+        return when (strategy) {
+            VoiceFlowRecordingStrategy.GROK_BATCH -> {
+                try {
+                    grokTranscriber.transcribe(
+                        audioFile = audioFile,
+                        baseURL = snapshot.endpoint,
+                        token = token,
+                        terms = snapshot.terms,
+                    )
+                } catch (error: VoiceFlowError) {
+                    throw error
+                } catch (t: Throwable) {
+                    throw VoiceFlowError.Underlying(t.toString())
+                }
+            }
+            VoiceFlowRecordingStrategy.OPENAI_REALTIME -> {
+                val pcm: ByteArray = try {
+                    Pcm16WavWriter.readPcm(audioFile)
+                } catch (_: Throwable) {
+                    throw VoiceFlowError.AudioConversionFailed
+                }
+                try {
+                    val text = transcriber.transcribeBulkPcm(
+                        pcm = pcm,
+                        baseURL = snapshot.endpoint,
+                        token = token,
+                        model = snapshot.model,
+                        context = RealtimeSessionContext(prompt = snapshot.prompt, terms = snapshot.terms),
+                        onPartialTranscript = onPartialTranscript,
+                    )
+                    TranscriptionResult(text = text, requestId = UUID.randomUUID().toString())
+                } catch (realtime: RealtimeTranscriptionError) {
+                    throw VoiceFlowError.from(realtime)
+                }
+            }
         }
     }
 
-    /**
-     * Transcribe audio preserved from an aborted realtime session. The handle
-     * remains valid until [discardPreservedAudio] is called or the OS clears temp files.
-     */
     suspend fun transcribe(
         preservedAudio: VoiceFlowPreservedAudio,
         onPartialTranscript: ((String) -> Unit)? = null,
@@ -119,7 +138,7 @@ class VoiceFlowClient internal constructor(
         val token = currentToken(snapshot)
         val pcm = try {
             preservedAudio.file.readBytes()
-        } catch (t: Throwable) {
+        } catch (_: Throwable) {
             throw VoiceFlowError.AudioConversionFailed
         }
         if (pcm.isEmpty()) throw VoiceFlowError.EmptyTranscript
@@ -138,16 +157,10 @@ class VoiceFlowClient internal constructor(
         }
     }
 
-    /** Delete the temporary file behind a preserved audio handle. */
     fun discardPreservedAudio(preservedAudio: VoiceFlowPreservedAudio) {
         preservedAudio.file.delete()
     }
 
-    /**
-     * Verify endpoint reachability + token validity. Throws on any failure.
-     * Non-[VoiceFlowError] causes are wrapped in [VoiceFlowError.Underlying],
-     * mirroring the Swift facade.
-     */
     suspend fun testConnection() {
         val snapshot = configMutex.withLock { config }
         val token = currentToken(snapshot)
@@ -158,22 +171,19 @@ class VoiceFlowClient internal constructor(
             )
         } catch (voiceFlow: VoiceFlowError) {
             throw voiceFlow
+        } catch (realtime: RealtimeTranscriptionError) {
+            throw VoiceFlowError.from(realtime)
         } catch (t: Throwable) {
             throw VoiceFlowError.Underlying(t.toString())
         }
     }
 
-    /**
-     * Fetch + trim the bearer token. Empty token => [VoiceFlowError.MissingToken].
-     * Any non-VoiceFlowError thrown by the provider is also coerced to
-     * MissingToken, matching the Swift `currentToken()` behavior.
-     */
     private suspend fun currentToken(config: VoiceFlowConfig): String {
         val token = try {
             config.tokenProvider().trim()
         } catch (voiceFlow: VoiceFlowError) {
             throw voiceFlow
-        } catch (t: Throwable) {
+        } catch (_: Throwable) {
             throw VoiceFlowError.MissingToken
         }
         if (token.isEmpty()) throw VoiceFlowError.MissingToken
@@ -181,28 +191,39 @@ class VoiceFlowClient internal constructor(
     }
 
     companion object {
-        /**
-         * Offline stub client. Does not open a WebSocket; [startSession]
-         * returns a session whose [VoiceFlowSession.commitAndStop] resolves
-         * to the canned [liveTranscript] after emitting a connected → idle
-         * event sequence. [transcribe] returns [bulkTranscript] (falls back
-         * to [liveTranscript] if unset).
-         *
-         * Use this in host UI-test launch modes and design-time scaffolding.
-         * Tokens in `config.tokenProvider` are ignored; the stub does not
-         * authenticate. The returned client is otherwise indistinguishable
-         * from a production one.
-         */
         fun makeStub(
             config: VoiceFlowConfig = VoiceFlowConfig(tokenProvider = { "stub-token" }),
             liveTranscript: String = "Mock transcription",
             bulkTranscript: String? = null,
+            grokTranscript: String = bulkTranscript ?: liveTranscript,
         ): VoiceFlowClient {
             val transcriber = MockRealtimeTranscriptionClient(
                 liveTranscript = liveTranscript,
                 bulkTranscript = bulkTranscript,
             )
-            return VoiceFlowClient(config = config, transcriber = transcriber)
+            val grok = object : GrokBatchTranscribing {
+                override suspend fun transcribe(
+                    audioFile: File,
+                    baseURL: String,
+                    token: String,
+                    terms: List<String>,
+                ): TranscriptionResult =
+                    TranscriptionResult(
+                        text = grokTranscript,
+                        requestId = UUID.randomUUID().toString(),
+                    )
+            }
+            return VoiceFlowClient(
+                config = config,
+                transcriber = transcriber,
+                grokTranscriber = grok,
+            )
         }
+
+        internal fun forTests(
+            config: VoiceFlowConfig,
+            transcriber: RealtimeTranscribing,
+            grokTranscriber: GrokBatchTranscribing,
+        ): VoiceFlowClient = VoiceFlowClient(config, transcriber, grokTranscriber)
     }
 }

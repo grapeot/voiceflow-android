@@ -97,19 +97,38 @@ class VoiceFlowMicrophone(
     suspend fun requestPermission(): Boolean = hasPermission()
 
     /**
-     * Start capturing. [onPCMChunk] is invoked with each PCM16 / 24 kHz /
-     * mono chunk on the capture (IO) dispatcher. The same chunks feed the
-     * [audioLevel] meter.
+     * Start capturing with the default OpenAI realtime strategy.
+     * Prefer [start] with an explicit [VoiceFlowRecordingStrategy] when the
+     * host supports dual strategies.
+     */
+    suspend fun start(
+        persist: Boolean = false,
+        onPCMChunk: (ByteArray) -> Unit,
+    ) {
+        start(
+            strategy = VoiceFlowRecordingStrategy.OPENAI_REALTIME,
+            persist = persist,
+            onPCMChunk = onPCMChunk,
+        )
+    }
+
+    /**
+     * Start capturing for the selected complete recording strategy.
      *
-     * @param persist when true, the raw PCM is buffered so [stop] can
-     *   return a WAV file for later replay/export.
+     * Both strategies currently capture PCM16 / 24 kHz / mono for metering and
+     * local persistence. OpenAI hosts still stream chunks live; Grok hosts must
+     * not open a realtime session and only upload after [stop].
+     *
+     * Android V0 of Grok Batch persists WAV (Grok STT accepts WAV). AAC-LC M4A
+     * parity with iOS can follow without changing this public API.
      *
      * @throws VoiceFlowError.MicrophoneUnavailable if permission is not
      *   granted or the audio hardware fails to initialize.
      */
     suspend fun start(
-        persist: Boolean = false,
-        onPCMChunk: (ByteArray) -> Unit,
+        strategy: VoiceFlowRecordingStrategy,
+        persist: Boolean = true,
+        onPCMChunk: ((ByteArray) -> Unit)? = null,
     ) {
         if (!hasPermission()) {
             throw VoiceFlowError.MicrophoneUnavailable
@@ -117,30 +136,27 @@ class VoiceFlowMicrophone(
 
         recordingFile = null
         smoothedLevel = 0f
+        // Grok always needs a local file for the post-Stop upload.
+        val shouldPersist = persist || strategy == VoiceFlowRecordingStrategy.GROK_BATCH
 
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         captureScope = scope
 
         try {
             recorder.start(
-                persist = persist,
+                persist = shouldPersist,
                 scope = scope,
                 onChunk = { chunk ->
                     val raw = VoiceFlowAudioMetering.normalizedLevel(chunk)
                     smoothedLevel = smoothedLevel * 0.7f + raw * 0.3f
-                    // tryEmit keeps capture lock-free; replay=1 + buffer=16
-                    // mean a momentarily-slow collector just sees the newest.
                     _audioLevel.tryEmit(smoothedLevel)
-                    onPCMChunk(chunk)
+                    onPCMChunk?.invoke(chunk)
                 },
                 onError = {
-                    // Mirror Swift: a capture failure tears down the loop.
-                    // Cancelling the scope ends the read loop; the live
-                    // pipeline detects the resulting silence/disconnect.
                     scope.cancel()
                 },
             )
-        } catch (error: Throwable) {
+        } catch (_: Throwable) {
             captureScope = null
             throw VoiceFlowError.MicrophoneUnavailable
         }

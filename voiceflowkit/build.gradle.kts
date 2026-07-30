@@ -10,7 +10,7 @@ plugins {
 //   group is rewritten to `com.github.grapeot` and the artifact is `voiceflow-android`
 //   (the repo name), e.g. implementation("com.github.grapeot:voiceflow-android:<tag>").
 group = "com.yage"
-version = "0.1.0"
+version = "0.3.0"
 
 android {
     namespace = "com.yage.voiceflowkit"

@@ -109,6 +109,10 @@
 
     <string name="settings_transcription_title">Transcription</string>
     <string name="settings_transcription_description">Optional hints the transcription model reads before working. Include language, vocabulary, or context in plain language.</string>
+    <string name="settings_transcription_strategy">Recording strategy</string>
+    <string name="settings_transcription_strategy_openai">OpenAI Realtime</string>
+    <string name="settings_transcription_strategy_grok">Grok Batch</string>
+    <string name="settings_transcription_strategy_grok_hint">Grok records locally and uploads after Stop. Context prompt is not sent; terms still apply.</string>
     <string name="settings_transcription_prompt">Context prompt</string>
     <string name="settings_transcription_prompt_placeholder">e.g. Transcribe every word in ALL CAPS. Example: THIS IS A TEST.</string>
     <string name="settings_transcription_terms">Terms</string>

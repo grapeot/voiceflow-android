@@ -107,6 +107,10 @@
 
     <string name="settings_transcription_title">转写设置</string>
     <string name="settings_transcription_description">可选的提示，转写前会传给模型。可以用自然语言写明语言、术语或上下文。</string>
+    <string name="settings_transcription_strategy">录音策略</string>
+    <string name="settings_transcription_strategy_openai">OpenAI Realtime</string>
+    <string name="settings_transcription_strategy_grok">Grok Batch</string>
+    <string name="settings_transcription_strategy_grok_hint">Grok 仅在本地录音，停止后才上传。上下文提示不会发送；术语字典仍然生效。</string>
     <string name="settings_transcription_prompt">上下文提示</string>
     <string name="settings_transcription_prompt_placeholder">例如：把每个英文单词转写为全大写。例：THIS IS A TEST.</string>
     <string name="settings_transcription_terms">术语字典</string>

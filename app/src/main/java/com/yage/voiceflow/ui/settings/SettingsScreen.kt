@@ -42,6 +42,7 @@ import com.yage.voiceflow.model.AppLanguage
 import com.yage.voiceflow.model.ConnectionTestStatus
 import com.yage.voiceflow.ui.theme.DesignTokens
 import com.yage.voiceflowkit.VoiceFlowConfig
+import com.yage.voiceflowkit.VoiceFlowRecordingStrategy
 
 /**
  * The Settings tab. Faithful Material port of the iOS `SettingsView`, section
@@ -180,16 +181,44 @@ fun SettingsScreen(
                     style = DesignTokens.Typography.captionSub,
                     color = DesignTokens.Palette.textTertiary,
                 )
-                FieldLabel(stringRes(R.string.settings_transcription_prompt))
-                OutlinedTextField(
-                    value = state.prompt,
-                    onValueChange = viewModel::updatePrompt,
-                    placeholder = { Text(stringRes(R.string.settings_transcription_prompt_placeholder)) },
-                    minLines = 2,
-                    maxLines = 4,
-                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                    modifier = Modifier.fillMaxWidth(),
+                FieldLabel(stringRes(R.string.settings_transcription_strategy))
+                val strategies = listOf(
+                    VoiceFlowRecordingStrategy.OPENAI_REALTIME to R.string.settings_transcription_strategy_openai,
+                    VoiceFlowRecordingStrategy.GROK_BATCH to R.string.settings_transcription_strategy_grok,
                 )
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    strategies.forEachIndexed { index, (strategy, labelRes) ->
+                        SegmentedButton(
+                            selected = state.recordingStrategy == strategy,
+                            onClick = { viewModel.updateRecordingStrategy(strategy) },
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index = index,
+                                count = strategies.size,
+                            ),
+                        ) {
+                            Text(stringRes(labelRes))
+                        }
+                    }
+                }
+                if (state.recordingStrategy == VoiceFlowRecordingStrategy.GROK_BATCH) {
+                    Text(
+                        stringRes(R.string.settings_transcription_strategy_grok_hint),
+                        style = DesignTokens.Typography.captionSub,
+                        color = DesignTokens.Palette.textTertiary,
+                    )
+                }
+                if (state.recordingStrategy == VoiceFlowRecordingStrategy.OPENAI_REALTIME) {
+                    FieldLabel(stringRes(R.string.settings_transcription_prompt))
+                    OutlinedTextField(
+                        value = state.prompt,
+                        onValueChange = viewModel::updatePrompt,
+                        placeholder = { Text(stringRes(R.string.settings_transcription_prompt_placeholder)) },
+                        minLines = 2,
+                        maxLines = 4,
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 FieldLabel(stringRes(R.string.settings_transcription_terms))
                 OutlinedTextField(
                     value = state.terms,
