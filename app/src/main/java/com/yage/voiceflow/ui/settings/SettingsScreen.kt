@@ -1,6 +1,7 @@
 package com.yage.voiceflow.ui.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -10,10 +11,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
@@ -33,6 +40,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yage.voiceflow.MainViewModel
 import com.yage.voiceflow.R
@@ -186,6 +194,7 @@ fun SettingsScreen(
                     VoiceFlowRecordingStrategy.OPENAI_REALTIME to R.string.settings_transcription_strategy_openai,
                     VoiceFlowRecordingStrategy.GROK_BATCH to R.string.settings_transcription_strategy_grok,
                 )
+                var showStrategyHelp by rememberSaveable { mutableStateOf(false) }
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                     strategies.forEachIndexed { index, (strategy, labelRes) ->
                         SegmentedButton(
@@ -200,11 +209,42 @@ fun SettingsScreen(
                         }
                     }
                 }
-                Text(
-                    stringRes(R.string.settings_transcription_strategy_help),
-                    style = DesignTokens.Typography.captionSub,
-                    color = DesignTokens.Palette.textTertiary,
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Default.Info,
+                        contentDescription = stringRes(R.string.settings_transcription_strategy_dialog_title),
+                        tint = DesignTokens.Palette.textTertiary,
+                        modifier = Modifier
+                            .size(18.dp)
+                            .clickable { showStrategyHelp = true },
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        stringRes(R.string.settings_transcription_strategy_help),
+                        style = DesignTokens.Typography.captionSub,
+                        color = DesignTokens.Palette.textTertiary,
+                    )
+                }
+                if (showStrategyHelp) {
+                    AlertDialog(
+                        onDismissRequest = { showStrategyHelp = false },
+                        title = { Text(stringRes(R.string.settings_transcription_strategy_dialog_title)) },
+                        text = {
+                            Text(
+                                stringRes(R.string.settings_transcription_strategy_dialog_body),
+                                style = DesignTokens.Typography.captionSub,
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { showStrategyHelp = false }) {
+                                Text(stringRes(R.string.ok))
+                            }
+                        },
+                    )
+                }
                 if (state.recordingStrategy == VoiceFlowRecordingStrategy.GROK_BATCH) {
                     Text(
                         stringRes(R.string.settings_transcription_strategy_grok_hint),
