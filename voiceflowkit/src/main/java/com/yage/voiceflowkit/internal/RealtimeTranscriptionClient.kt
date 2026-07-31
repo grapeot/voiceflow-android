@@ -4,8 +4,11 @@ import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -16,6 +19,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import com.yage.voiceflowkit.VoiceFlowPreservedAudio
+import com.yage.voiceflowkit.VoiceFlowRecordingStrategy
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -33,6 +37,7 @@ internal interface RealtimeTranscribing {
         baseURL: String,
         token: String,
         model: String,
+        strategy: VoiceFlowRecordingStrategy,
         context: RealtimeSessionContext,
         onEvent: (RealtimeTranscriptEvent) -> Unit,
     ): RealtimeLiveTranscriptionSession
@@ -42,6 +47,7 @@ internal interface RealtimeTranscribing {
         baseURL: String,
         token: String,
         model: String,
+        strategy: VoiceFlowRecordingStrategy,
         context: RealtimeSessionContext,
         onPartialTranscript: ((String) -> Unit)?,
     ): String
@@ -91,6 +97,7 @@ internal class RealtimeTranscriptionClient(
         baseURL: String,
         token: String,
         model: String,
+        strategy: VoiceFlowRecordingStrategy,
         context: RealtimeSessionContext,
         onEvent: (RealtimeTranscriptEvent) -> Unit,
     ): RealtimeLiveTranscriptionSession {
@@ -106,19 +113,17 @@ internal class RealtimeTranscriptionClient(
         // bookkeeping + UI filter, mirroring Swift's `deliverLiveSessionEvent`.
         lateinit var handle: RealtimeLiveSessionHandle
 
-        val makeSession: suspend () -> RealtimeWebSocketSession = {
+        val makeSession: suspend (Long) -> RealtimeWebSocketSession = { generation ->
             makeSession(
                 baseURL = baseURL,
                 token = trimmedToken,
                 model = model,
+                strategy = strategy,
                 vad = false,
                 context = context,
             ) { event ->
-                scope.launch {
-                    handle.ingestServerEvent(event)
-                    if (handle.shouldNotifyUI(event)) {
-                        onEvent(event)
-                    }
+                if (handle.ingestServerEvent(generation, event)) {
+                    onEvent(event)
                 }
             }
         }
@@ -127,15 +132,26 @@ internal class RealtimeTranscriptionClient(
             cache = cache,
             onEvent = onEvent,
             makeSession = makeSession,
+            strategy = strategy,
+            model = model,
         )
 
         // Connect the first socket off the caller's thread, like Swift's detached Task.
         scope.launch {
             try {
-                val initialSession = makeSession()
-                handle.attachInitialSession(initialSession)
+                val initialSession = makeSession(RealtimeLiveSessionHandle.INITIAL_GENERATION)
+                handle.attachInitialSession(
+                    initialSession,
+                    RealtimeLiveSessionHandle.INITIAL_GENERATION,
+                )
             } catch (error: Exception) {
-                onEvent(RealtimeTranscriptEvent.RecoveryFailed(error.toString()))
+                if (handle.failInitialConnection(
+                        RealtimeLiveSessionHandle.INITIAL_GENERATION,
+                        error,
+                    )
+                ) {
+                    onEvent(RealtimeTranscriptEvent.RecoveryFailed(error.toString()))
+                }
             }
         }
 
@@ -147,6 +163,7 @@ internal class RealtimeTranscriptionClient(
         baseURL: String,
         token: String,
         model: String,
+        strategy: VoiceFlowRecordingStrategy,
         context: RealtimeSessionContext,
         onPartialTranscript: ((String) -> Unit)?,
     ): String = withContext(Dispatchers.IO) {
@@ -159,10 +176,11 @@ internal class RealtimeTranscriptionClient(
             baseURL = baseURL,
             token = token,
             model = model,
+            strategy = strategy,
             vad = false,
             context = context,
         ) { event ->
-            scope.launch { progress.handle(event, onPartialTranscript) }
+            progress.handle(event, onPartialTranscript)
         }
 
         try {
@@ -174,19 +192,13 @@ internal class RealtimeTranscriptionClient(
             }
             session.sendCommit()
 
-            val deadline = System.currentTimeMillis() + RealtimeTranscriptionConfig.FINALIZE_TIMEOUT_MS
+            val timeoutMs = RealtimeTranscriptionConfig.finalizeTimeoutMs(strategy, pcm.size)
+            val deadline = System.currentTimeMillis() + timeoutMs
             while (!progress.isFinished() && System.currentTimeMillis() < deadline) {
                 kotlinx.coroutines.delay(100)
             }
 
-            progress.receivedError()?.let { message ->
-                throw RealtimeTranscriptionError.WebsocketError(message)
-            }
-            val trimmed = progress.transcript().trim()
-            if (trimmed.isEmpty()) {
-                throw RealtimeTranscriptionError.EmptyTranscript
-            }
-            trimmed
+            resolveCompletedBulkTranscript(progress)
         } finally {
             session.close()
         }
@@ -202,9 +214,10 @@ internal class RealtimeTranscriptionClient(
         baseURL: String,
         token: String,
         model: String,
+        strategy: VoiceFlowRecordingStrategy,
         vad: Boolean,
         context: RealtimeSessionContext,
-        onEvent: (RealtimeTranscriptEvent) -> Unit,
+        onEvent: suspend (RealtimeTranscriptEvent) -> Unit,
     ): RealtimeWebSocketSession = withContext(Dispatchers.IO) {
         val normalizedBase = RealtimeApiUrlBuilder.normalizedBaseURL(baseURL)
         val createResponse = createRealtimeSession(normalizedBase, token, model, vad, context)
@@ -214,6 +227,7 @@ internal class RealtimeTranscriptionClient(
         )
 
         val readySignal = CompletableDeferred<Unit>()
+        val eventDispatcher = OrderedRealtimeEventDispatcher(scope, onEvent)
         // The session wrapper is assigned before any non-ready frame can reach it.
         var liveSession: RealtimeWebSocketSession? = null
 
@@ -221,7 +235,9 @@ internal class RealtimeTranscriptionClient(
             override fun onMessage(webSocket: WebSocket, text: String) {
                 val type = runCatching { JSONObject(text).optString("type") }.getOrDefault("")
                 if (type == "session_ready") {
-                    onEvent(RealtimeTranscriptEvent.Status(RealtimeServerStatus.Connected))
+                    eventDispatcher.dispatch(
+                        RealtimeTranscriptEvent.Status(RealtimeServerStatus.Connected),
+                    )
                     if (!readySignal.isCompleted) readySignal.complete(Unit)
                     return
                 }
@@ -240,13 +256,20 @@ internal class RealtimeTranscriptionClient(
 
         val request = Request.Builder().url(websocketURL).build()
         val webSocket = httpClient.newWebSocket(request, listener)
-        val session = RealtimeWebSocketSession(webSocket = webSocket, onEvent = onEvent)
+        val session = RealtimeWebSocketSession(
+            webSocket = webSocket,
+            onEvent = eventDispatcher::dispatch,
+            onEventsClosed = eventDispatcher::finish,
+            requiresTurnCompletedBeforeStop =
+                strategy == VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE,
+        )
         liveSession = session
 
         try {
             readySignal.await()
         } catch (error: Exception) {
             webSocket.cancel()
+            eventDispatcher.finish()
             throw RealtimeTranscriptionError.WebsocketError(
                 "WebSocket failed before session_ready: ${error.message}",
             )
@@ -267,17 +290,7 @@ internal class RealtimeTranscriptionClient(
             baseURL,
             RealtimeTranscriptionConfig.SESSION_CREATE_PATH,
         )
-        val payload = JSONObject()
-            .put("model", model)
-            .put("vad", vad)
-            .put("silence_duration_ms", RealtimeTranscriptionConfig.SILENCE_DURATION_MS)
-
-        context.prompt?.trim()?.takeIf { it.isNotEmpty() }?.let { payload.put("prompt", it) }
-        if (context.terms.isNotEmpty()) {
-            val jsonTerms = JSONArray()
-            context.terms.forEach { jsonTerms.put(it) }
-            payload.put("terms", jsonTerms)
-        }
+        val payload = realtimeSessionCreatePayload(model, vad, context)
 
         Log.d(
             TAG,
@@ -319,3 +332,59 @@ internal data class RealtimeSessionCreateResponse(
     val sessionId: String,
     val wsUrl: String,
 )
+
+internal fun realtimeSessionCreatePayload(
+    model: String,
+    vad: Boolean,
+    context: RealtimeSessionContext,
+): JSONObject {
+    val payload = JSONObject()
+        .put("model", model)
+        .put("vad", vad)
+        .put("silence_duration_ms", RealtimeTranscriptionConfig.SILENCE_DURATION_MS)
+    context.prompt?.trim()?.takeIf { it.isNotEmpty() }?.let { payload.put("prompt", it) }
+    if (context.terms.isNotEmpty()) {
+        val jsonTerms = JSONArray()
+        context.terms.forEach { jsonTerms.put(it) }
+        payload.put("terms", jsonTerms)
+    }
+    return payload
+}
+
+internal suspend fun resolveCompletedBulkTranscript(progress: BulkTranscriptionProgress): String {
+    progress.receivedError()?.let { message ->
+        throw RealtimeTranscriptionError.WebsocketError(message)
+    }
+    if (!progress.isFinished()) {
+        throw RealtimeTranscriptionError.ConnectionLost(
+            "Timed out waiting for transcription to finish",
+        )
+    }
+    return progress.transcript().trim().ifEmpty {
+        throw RealtimeTranscriptionError.EmptyTranscript
+    }
+}
+
+/** Serializes one socket's inbound events before they mutate session state. */
+internal class OrderedRealtimeEventDispatcher(
+    scope: CoroutineScope,
+    private val handler: suspend (RealtimeTranscriptEvent) -> Unit,
+) {
+    private val events = Channel<RealtimeTranscriptEvent>(Channel.UNLIMITED)
+    private val consumer: Job = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+        for (event in events) handler(event)
+    }
+
+    fun dispatch(event: RealtimeTranscriptEvent) {
+        events.trySend(event)
+    }
+
+    fun finish() {
+        events.close()
+    }
+
+    suspend fun finishAndJoin() {
+        finish()
+        consumer.join()
+    }
+}

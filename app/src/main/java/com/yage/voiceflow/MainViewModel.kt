@@ -29,10 +29,14 @@ import com.yage.voiceflowkit.VoiceFlowConnectionPhase
 import com.yage.voiceflowkit.VoiceFlowError
 import com.yage.voiceflowkit.VoiceFlowEvent
 import com.yage.voiceflowkit.VoiceFlowMicrophone
+import com.yage.voiceflowkit.VoiceFlowPreservedAudio
 import com.yage.voiceflowkit.VoiceFlowRecordingStrategy
 import com.yage.voiceflowkit.VoiceFlowSession
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,7 +45,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Reconcile a newly streamed transcript snapshot against the currently displayed
@@ -74,6 +80,70 @@ fun applyStreamedTranscript(current: String, incoming: String): String {
 internal fun copyTranscriptIfPresent(text: String, write: (String) -> Boolean): Boolean? {
     if (text.trim().isEmpty()) return null
     return write(text)
+}
+
+/** Bounded, nonblocking microphone handoff with a finite drain barrier. */
+internal class OrderedAudioSender(
+    scope: CoroutineScope,
+    send: suspend (ByteArray) -> Unit,
+    capacity: Int = DEFAULT_CAPACITY,
+) {
+    private val chunks = Channel<ByteArray>(capacity)
+    private val failed = AtomicBoolean(false)
+    private val consumer = scope.launch {
+        try {
+            for (chunk in chunks) send(chunk)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            failed.set(true)
+        } finally {
+            chunks.cancel()
+        }
+    }
+
+    fun tryEnqueue(chunk: ByteArray): Boolean =
+        !failed.get() && chunks.trySend(chunk).isSuccess
+
+    suspend fun drain(timeoutMs: Long = DRAIN_TIMEOUT_MS): Boolean {
+        chunks.close()
+        val completed = withTimeoutOrNull(timeoutMs) {
+            consumer.join()
+            true
+        } ?: false
+        if (!completed) {
+            failed.set(true)
+            consumer.cancelAndJoin()
+        }
+        return completed && !failed.get()
+    }
+
+    fun cancel() {
+        failed.set(true)
+        chunks.cancel()
+        consumer.cancel()
+    }
+
+    private companion object {
+        const val DEFAULT_CAPACITY = 8
+        const val DRAIN_TIMEOUT_MS = 1_000L
+    }
+}
+
+/** Rejects results from transcription attempts superseded by Resend/background cleanup. */
+internal class TranscriptionAttemptGate {
+    private var generation = 0L
+
+    @Synchronized
+    fun next(): Long = ++generation
+
+    @Synchronized
+    fun invalidate() {
+        generation += 1
+    }
+
+    @Synchronized
+    fun isCurrent(attempt: Long): Boolean = attempt == generation
 }
 
 /**
@@ -131,7 +201,7 @@ data class UiState(
     // --- Transcription settings ---
     val prompt: String = "",
     val terms: String = "",
-    val recordingStrategy: VoiceFlowRecordingStrategy = VoiceFlowRecordingStrategy.OPENAI_REALTIME,
+    val recordingStrategy: VoiceFlowRecordingStrategy = VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE,
 
     // --- Language ---
     val language: AppLanguage = AppLanguage.System,
@@ -257,6 +327,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var levelJob: Job? = null
     private var timerJob: Job? = null
     private var transientCaptionJob: Job? = null
+    private var audioSender: OrderedAudioSender? = null
+    private val liveAudioDeliveryFailed = AtomicBoolean(false)
+    private var preservedLiveAudio: VoiceFlowPreservedAudio? = null
+    private var transcriptionJob: Job? = null
+    private val transcriptionAttemptGate = TranscriptionAttemptGate()
 
     /**
      * Stop->finalize typewriter pipeline. During finalize the kit calls back once
@@ -276,11 +351,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Strategy that produced [lastRecordingFile]; resend must not use the current picker. */
     private var lastRecordingStrategy: VoiceFlowRecordingStrategy =
-        VoiceFlowRecordingStrategy.OPENAI_REALTIME
+        VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE
 
     /** Snapshot of Settings strategy for the in-flight recording. */
     private var activeRecordingStrategy: VoiceFlowRecordingStrategy =
-        VoiceFlowRecordingStrategy.OPENAI_REALTIME
+        VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE
 
     /** True while the user has hand-edited the transcript mid-stream. */
     private var userEditedTranscriptDuringStream = false
@@ -617,6 +692,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val wav = runCatching { microphone.stop() }.getOrNull()
                 if (wav != null && wav.exists() && wav.length() > 0L) {
                     lastRecordingFile = wav
+                    lastRecordingStrategy = activeRecordingStrategy
                     _state.update {
                         it.copy(
                             hasRecordingFile = true,
@@ -627,7 +703,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     wav?.let { runCatching { it.delete() } }
                     _state.update { it.copy(recordingStatus = RecordingStatus.Idle) }
                 }
+                val activeSession = session
+                if (!drainAudioSender() && activeSession != null) {
+                    liveAudioDeliveryFailed.set(true)
+                    preserveLiveSessionAfterDeliveryFailure(activeSession)
+                }
             }
+            transcriptionJob?.cancel()
+            transcriptionJob = null
+            transcriptionAttemptGate.invalidate()
             cancelLiveTranscriptionSession()
         }
     }
@@ -652,6 +736,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         try {
+            discardPreservedLiveAudio()
+            liveAudioDeliveryFailed.set(false)
             // Reset per-session state (mirrors the iOS do-block setup).
             _state.update {
                 it.copy(
@@ -682,7 +768,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             val liveSession: VoiceFlowSession? =
                 if (strategy.usesRealtimeTransport) {
-                    val newSession = voiceFlowClient.startSession()
+                    val newSession = voiceFlowClient.startSession(strategy)
                     session = newSession
                     // Start the event consumer immediately so the earliest PhaseChanged
                     // is caught before mic.start (the SharedFlow has replay=0).
@@ -693,6 +779,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     session = null
                     null
                 }
+            val sender = liveSession?.let {
+                OrderedAudioSender(viewModelScope, it::sendAudioChunk).also { value ->
+                    audioSender = value
+                }
+            }
 
             microphone.start(strategy = strategy, persist = true) { chunk ->
                 // Signal quality detection: accumulate peakRms and activeAudioMs.
@@ -705,10 +796,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         setPersistentStreamCaption(null)
                     }
                 }
-                // OpenAI only: forward PCM live. Grok Batch never opens a session.
-                val active = liveSession
-                if (active != null) {
-                    viewModelScope.launch { runCatching { active.sendAudioChunk(chunk) } }
+                // Realtime strategies forward PCM live. Grok Batch never opens a session.
+                if (liveSession != null && sender != null && !sender.tryEnqueue(chunk)) {
+                    markLiveAudioDeliveryFailed(liveSession, sender)
                 }
             }
 
@@ -742,13 +832,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         signalBannerGraceJob?.cancel()
         signalBannerGraceJob = null
         _state.update { it.copy(recordingStatus = RecordingStatus.Transcribing) }
-        viewModelScope.launch {
+        transcriptionJob?.cancel()
+        val attempt = transcriptionAttemptGate.next()
+        transcriptionJob = viewModelScope.launch {
             val wav: File?
             try {
                 wav = microphone.stop()
             } catch (t: Throwable) {
                 cancelLiveTranscriptionSession()
-                presentRecordError("record.error.transcriptionFailed")
+                if (transcriptionAttemptGate.isCurrent(attempt)) {
+                    presentRecordError("record.error.transcriptionFailed")
+                }
                 return@launch
             }
 
@@ -756,9 +850,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (wav == null || !wav.exists() || wav.length() == 0L) {
                 wav?.let { runCatching { it.delete() } }
                 cancelLiveTranscriptionSession()
-                presentRecordError("record.error.transcriptionFailed")
+                if (transcriptionAttemptGate.isCurrent(attempt)) {
+                    presentRecordError("record.error.transcriptionFailed")
+                }
                 return@launch
             }
+
+            val audioDelivered = drainAudioSender()
 
             // Signal quality gate: evaluate before committing.
             val tier = evaluateSignalTier()
@@ -777,10 +875,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             lastRecordingFile = wav
             lastRecordingStrategy = activeRecordingStrategy
             _state.update { it.copy(hasRecordingFile = true) }
+            if (activeRecordingStrategy.usesRealtimeTransport &&
+                (!audioDelivered || liveAudioDeliveryFailed.get())
+            ) {
+                session?.let { preserveLiveSessionAfterDeliveryFailure(it) }
+                completeStopTranscriptionFailure(attempt, allowPartialSalvage = false)
+                return@launch
+            }
             if (activeRecordingStrategy.usesRealtimeTransport) {
-                finishLiveTranscriptionSession()
+                finishLiveTranscriptionSession(attempt)
             } else {
-                finishGrokBatchTranscription()
+                finishGrokBatchTranscription(attempt)
             }
         }
     }
@@ -788,14 +893,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Grok Batch path: no live session. Upload the local capture after Stop.
      */
-    private suspend fun finishGrokBatchTranscription() {
+    private suspend fun finishGrokBatchTranscription(attempt: Long) {
         isTranscriptionTeardown = true
         try {
-            val text = finishTranscriptionFromLastRecording(presentErrorOnFailure = false)
+            val text = finishTranscriptionFromLastRecording(
+                presentErrorOnFailure = false,
+                attempt = attempt,
+            )
+            if (!transcriptionAttemptGate.isCurrent(attempt)) return
             if (text != null && isUsableTranscript(text)) {
-                completeStopTranscriptionSuccess(text)
+                completeStopTranscriptionSuccess(text, attempt)
             } else {
-                completeStopTranscriptionFailure()
+                completeStopTranscriptionFailure(attempt)
             }
         } finally {
             isTranscriptionTeardown = false
@@ -807,7 +916,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * if the stream text is unusable. Direct port of iOS
      * `finishLiveTranscriptionSession`.
      */
-    private suspend fun finishLiveTranscriptionSession() {
+    private suspend fun finishLiveTranscriptionSession(attempt: Long) {
         stopStreamHeartbeat()
         isTranscriptionTeardown = true
         // Start a fresh per-delta typewriter pipeline before any finalize callbacks
@@ -816,42 +925,63 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         try {
             val activeSession = session
             if (activeSession == null) {
-                completeStopTranscriptionFailure()
+                completeStopTranscriptionFailure(attempt)
                 return
             }
 
             var streamText = ""
             try {
                 streamText = activeSession.commitAndStop { partial ->
-                    updateTranscriptDuringFinalize(partial)
+                    if (transcriptionAttemptGate.isCurrent(attempt)) {
+                        updateTranscriptDuringFinalize(partial)
+                    }
                 }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (_: Throwable) {
                 // Swallow; the fallback path below handles unusable output.
             }
 
+            if (!transcriptionAttemptGate.isCurrent(attempt)) return
             cancelLiveTranscriptionSession()
 
             if (isUsableTranscript(streamText)) {
                 // Let the typewriter drain every queued delta before the final
                 // write, so the animation is never truncated by the overwrite.
                 drainFinalizeTypewriter()
-                completeStopTranscriptionSuccess(streamText)
+                completeStopTranscriptionSuccess(streamText, attempt)
                 return
             }
 
             if (isAppStopped) {
-                completeStopTranscriptionFailure()
+                completeStopTranscriptionFailure(
+                    attempt = attempt,
+                    allowPartialSalvage = activeRecordingStrategy !=
+                        VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE,
+                )
                 return
             }
 
-            val bulk = finishTranscriptionFromLastRecording(presentErrorOnFailure = false)
+            // GPT Live may have consumed the full paced turn before failing. Keep
+            // the WAV for an explicit Resend rather than opening a second paid
+            // ticket automatically, and never promote its partial text to final.
+            if (activeRecordingStrategy == VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE) {
+                completeStopTranscriptionFailure(attempt, allowPartialSalvage = false)
+                return
+            }
+
+            val bulk = finishTranscriptionFromLastRecording(
+                presentErrorOnFailure = false,
+                attempt = attempt,
+            )
+            if (!transcriptionAttemptGate.isCurrent(attempt)) return
             if (bulk != null && isUsableTranscript(bulk)) {
                 drainFinalizeTypewriter()
-                completeStopTranscriptionSuccess(bulk)
+                completeStopTranscriptionSuccess(bulk, attempt)
                 return
             }
 
-            completeStopTranscriptionFailure()
+            completeStopTranscriptionFailure(attempt)
         } finally {
             isTranscriptionTeardown = false
         }
@@ -862,7 +992,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * fallback and by [resendLastRecording]. Port of iOS
      * `finishTranscriptionFromLastRecording`.
      */
-    private suspend fun finishTranscriptionFromLastRecording(presentErrorOnFailure: Boolean): String? {
+    private suspend fun finishTranscriptionFromLastRecording(
+        presentErrorOnFailure: Boolean,
+        attempt: Long,
+    ): String? {
         val file = lastRecordingFile
         if (file == null || !file.exists()) {
             if (presentErrorOnFailure) presentRecordError("record.error.transcriptionFailed")
@@ -879,20 +1012,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 audioFile = file,
                 strategy = strategy,
             ) { partial ->
-                if (strategy.usesRealtimeTransport) {
+                if (strategy.usesRealtimeTransport && transcriptionAttemptGate.isCurrent(attempt)) {
                     _state.update { it.copy(transcript = partial) }
                 }
             }
             result.text
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (t: Throwable) {
-            if (presentErrorOnFailure) presentRecordError("record.error.transcriptionFailed")
+            if (presentErrorOnFailure && transcriptionAttemptGate.isCurrent(attempt)) {
+                presentRecordError("record.error.transcriptionFailed")
+            }
             null
         }
     }
 
     private fun isUsableTranscript(text: String): Boolean = text.trim().length > 3
 
-    private fun completeStopTranscriptionSuccess(text: String) {
+    private fun completeStopTranscriptionSuccess(text: String, attempt: Long) {
+        if (!transcriptionAttemptGate.isCurrent(attempt)) return
         stopFinalizeTypewriter()
         _recordErrorKey.value = null
         _state.update {
@@ -911,10 +1049,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         copyTranscript()
     }
 
-    private fun completeStopTranscriptionFailure() {
+    private fun completeStopTranscriptionFailure(
+        attempt: Long,
+        allowPartialSalvage: Boolean = true,
+    ) {
+        if (!transcriptionAttemptGate.isCurrent(attempt)) return
         stopFinalizeTypewriter()
         val current = _state.value.transcript
-        if (isUsableTranscript(current)) {
+        if (allowPartialSalvage && isUsableTranscript(current)) {
             _state.update {
                 it.copy(
                     transcriptHistory = it.transcriptHistory.add(current),
@@ -949,7 +1091,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 lastClipboardStatusKey = null,
             )
         }
-        viewModelScope.launch {
+        transcriptionJob?.cancel()
+        val attempt = transcriptionAttemptGate.next()
+        transcriptionJob = viewModelScope.launch {
             if (snapshot.recordingStatus == RecordingStatus.Recording) {
                 val wav = try {
                     stopRecordingTimer()
@@ -970,11 +1114,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 lastRecordingFile = wav
                 lastRecordingStrategy = activeRecordingStrategy
                 _state.update { it.copy(hasRecordingFile = true) }
+                drainAudioSender()
+                cancelLiveTranscriptionSession()
+            } else {
                 cancelLiveTranscriptionSession()
             }
 
-            val bulk = finishTranscriptionFromLastRecording(presentErrorOnFailure = true)
-            if (bulk != null) {
+            discardPreservedLiveAudio()
+            val bulk = finishTranscriptionFromLastRecording(
+                presentErrorOnFailure = true,
+                attempt = attempt,
+            )
+            if (bulk != null && transcriptionAttemptGate.isCurrent(attempt)) {
                 _state.update {
                     it.copy(
                         transcript = bulk,
@@ -994,11 +1145,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun handleStreamEvent(event: VoiceFlowEvent) {
         when (event) {
             is VoiceFlowEvent.PartialTranscript -> {
-                // iOS ignores stream deltas while status is .recording (the live
-                // transcript only updates during finalize / generating).
-                if (_state.value.recordingStatus == RecordingStatus.Recording) return
+                if (_state.value.recordingStatus == RecordingStatus.Recording &&
+                    activeRecordingStrategy != VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE
+                ) return
                 if (!userEditedTranscriptDuringStream) {
-                    _state.update { it.copy(transcript = event.text) }
+                    _state.update { current ->
+                        current.copy(transcript = applyStreamedTranscript(current.transcript, event.text))
+                    }
                 }
             }
 
@@ -1135,6 +1288,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun cancelLiveTranscriptionSession() {
+        stopAudioSender()
         stopStreamHeartbeat()
         eventJob?.cancel()
         eventJob = null
@@ -1150,6 +1304,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         transientCaptionJob?.cancel()
         transientCaptionJob = null
+    }
+
+    private fun markLiveAudioDeliveryFailed(
+        activeSession: VoiceFlowSession,
+        sender: OrderedAudioSender,
+    ) {
+        if (!liveAudioDeliveryFailed.compareAndSet(false, true)) return
+        sender.cancel()
+        viewModelScope.launch {
+            preserveLiveSessionAfterDeliveryFailure(activeSession)
+        }
+    }
+
+    private suspend fun preserveLiveSessionAfterDeliveryFailure(activeSession: VoiceFlowSession) {
+        stopStreamHeartbeat()
+        val preserved = runCatching { activeSession.abortPreservingAudio() }.getOrNull()
+        if (preserved != null) preservedLiveAudio = preserved
+        if (session === activeSession) session = null
+        eventJob?.cancel()
+        eventJob = null
+        _state.update {
+            it.copy(
+                streamConnectionPhase = VoiceFlowConnectionPhase.Disconnected,
+                persistentStreamCaptionKey = StreamCaptionKey.STREAM_DISCONNECTED,
+            )
+        }
+    }
+
+    private fun discardPreservedLiveAudio() {
+        preservedLiveAudio?.let(voiceFlowClient::discardPreservedAudio)
+        preservedLiveAudio = null
+    }
+
+    private suspend fun drainAudioSender(): Boolean {
+        val sender = audioSender ?: return true
+        audioSender = null
+        return sender.drain()
+    }
+
+    private fun stopAudioSender() {
+        audioSender?.cancel()
+        audioSender = null
     }
 
     // endregion
@@ -1407,12 +1603,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         timerJob?.cancel()
         transientCaptionJob?.cancel()
         levelJob?.cancel()
+        transcriptionJob?.cancel()
+        transcriptionAttemptGate.invalidate()
+        stopAudioSender()
         teardownFinalizeTypewriter()
         // discard() releases the recorder and cancels the capture loop; cancel
         // closes any live socket before the ViewModel releases its last session ref.
         microphone.discard()
         kotlinx.coroutines.runBlocking { session?.cancel() }
         session = null
+        discardPreservedLiveAudio()
     }
 
     companion object {

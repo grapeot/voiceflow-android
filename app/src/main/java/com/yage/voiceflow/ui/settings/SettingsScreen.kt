@@ -25,6 +25,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -213,23 +214,27 @@ fun SettingsScreen(
                 }
                 val strategies = listOf(
                     VoiceFlowRecordingStrategy.OPENAI_REALTIME to R.string.settings_transcription_strategy_openai,
+                    VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE to
+                        R.string.settings_transcription_strategy_gpt_live,
                     VoiceFlowRecordingStrategy.GROK_BATCH to R.string.settings_transcription_strategy_grok,
                 )
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    strategies.forEachIndexed { index, (strategy, labelRes) ->
-                        SegmentedButton(
-                            selected = state.recordingStrategy == strategy,
-                            onClick = { viewModel.updateRecordingStrategy(strategy) },
-                            shape = SegmentedButtonDefaults.itemShape(
-                                index = index,
-                                count = strategies.size,
-                            ),
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    strategies.forEach { (strategy, labelRes) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { viewModel.updateRecordingStrategy(strategy) },
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
+                            RadioButton(
+                                selected = state.recordingStrategy == strategy,
+                                onClick = { viewModel.updateRecordingStrategy(strategy) },
+                            )
                             Text(stringRes(labelRes))
                         }
                     }
                 }
-                if (state.recordingStrategy == VoiceFlowRecordingStrategy.OPENAI_REALTIME) {
+                if (state.recordingStrategy.usesRealtimeTransport) {
                     FieldLabel(stringRes(R.string.settings_transcription_prompt))
                     OutlinedTextField(
                         value = state.prompt,

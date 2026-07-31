@@ -2,6 +2,29 @@
 
 ## Changelog
 
+### 2026-07-31 (GPT Live default strategy)
+
+- New installations now default to GPT Live Transcribe when no recording strategy has been saved. Existing valid choices and the established unknown-value compatibility fallback remain unchanged.
+- Verification: Kit/App unit tests and debug assemblies passed with Android Studio JBR.
+
+### 2026-07-31 (GPT Live recording-time transcript snapshots)
+
+- GPT Live now retains `transcript_delta` frames received before Stop and publishes accumulated snapshots through `VoiceFlowSession.events`; raw wire fragments remain internal. Finalize preserves the same accumulator and still treats `transcript_completed` as authoritative.
+- The reference app displays these snapshots during GPT Live recording while preserving GPT Realtime's existing recording-time suppression. A deterministic handle test covers recording deltas, the Stop boundary, and final snapshot replacement. Verification: focused handle tests plus full Kit/App JVM tests and debug assembles passed.
+
+### 2026-07-31 (GPT Live Transcribe)
+
+- Added `GPT_LIVE_TRANSCRIBE` with stable raw-value parsing and realtime capability. The existing no-argument `startSession()` and `OPENAI_REALTIME` continue using `VoiceFlowConfig.model`; only GPT Live pins `gpt-live-transcribe`.
+- `VoiceFlowSession`, `VoiceFlowPreservedAudio`, file bulk, live recovery, and preserved retry now carry the originating strategy. Preserved audio also retains the resolved originating model, so changing configuration before retry cannot reroute a custom GPT Realtime recording. GPT Live finalization uses `max(60s, pcmSeconds + 60s)` while GPT Realtime keeps 30 seconds; a deadline with partial-only text is an error.
+- Recovery replay and replacement-socket adoption now share the audio mutex. New appends cannot enter between reaching the cache tail and installing the replacement, and finalize requires the socket byte count to equal the cache exactly before commit. Retry transcript state starts empty; a nonblank `transcript_completed` payload is authoritative.
+- Quick Stop now waits for the pending initial handshake instead of treating its not-yet-attached socket as unavailable and opening a second ticket. Every initial/recovery socket owns a monotonically increasing generation; delayed events and send failures from replaced sockets fail the ownership check before touching phase, transcript, finalize signals, or recovery.
+- Realtime inbound events pass through one per-socket ordered consumer. Audio sends remain unpaced and apply a 1 MiB OkHttp queue bound. GPT Live requires `transcript_completed` and `turn_completed` in either order, a successful Stop enqueue, and only then `session_stopped`; premature shutdown and `WebSocket.send(false)` are finalize errors. Raw text events stay internal; the accumulated finalize callback is the sole transcript writer.
+- GPT Live gets one finalize attempt and retains audio for explicit host retry instead of automatically consuming another paid ticket. GPT Realtime retains its single recovery retry. The reference app keeps its WAV-based Resend flow and stale-attempt generation gate.
+- `cancel()` and `abortPreservingAudio()` now claim one atomic audio disposition. Abort is idempotent and cancel cannot delete a cache file after a preserved handle has won the race.
+- Reference app microphone delivery uses a nonblocking eight-chunk sender. The capture callback never waits on network backpressure; overflow, consumer failure, or a one-second drain timeout cancels live delivery, aborts/preserves the live cache, keeps the complete WAV, and surfaces explicit Resend instead of committing truncated audio. No 1x pacing was added.
+- Settings now expose GPT Realtime, GPT Live Transcribe, and Grok STT in a narrow-screen-safe list. Prompt remains visible for both realtime strategies; English and Simplified Chinese resources were updated without changing existing persisted values or the default.
+- Verification with Android Studio JBR: focused recovery/model/terminal-order/backpressure regressions, full `:voiceflowkit:testDebugUnitTest :app:testDebugUnitTest`, and `:voiceflowkit:assembleDebug :app:assembleDebug` passed. Live backend tests remain opt-in and were not run in this change.
+
 ### 2026-07-30 (OpenAI Realtime / Grok STT dual strategies)
 
 - Kit exposes `VoiceFlowRecordingStrategy` (`OPENAI_REALTIME` / `GROK_BATCH`), strategy-aware `VoiceFlowClient.transcribe(audioFile, strategy)` and `VoiceFlowMicrophone.start(strategy, ...)`.

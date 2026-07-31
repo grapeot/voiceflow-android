@@ -2,6 +2,7 @@ package com.yage.voiceflowkit.internal
 
 import android.util.Log
 import com.yage.voiceflowkit.VoiceFlowPreservedAudio
+import com.yage.voiceflowkit.VoiceFlowRecordingStrategy
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.TimeoutCancellationException
@@ -25,21 +26,26 @@ import kotlinx.coroutines.withTimeout
  *   tries with exponential backoff) and replays the full cache so the server sees
  *   the complete audio stream again.
  * - [finalize] commits the audio and waits for the server to deliver the final
- *   transcript, with a 30 s timeout and one automatic retry. The accumulated
- *   transcript is preserved across the retry so a transient drop doesn't lose text.
+ *   transcript, with a strategy-aware timeout. GPT Realtime may retry once on a fresh
+ *   socket; GPT Live leaves retries to an explicit host action.
  *
- * Server events arrive through [ingestServerEvent] (wired by the owning client);
- * [shouldNotifyUI] replicates Swift's finalize-aware filtering so partial deltas
- * and recoverable "buffer too small" noise don't leak to the UI outside finalize.
+ * Server events arrive through generation-gated [ingestServerEvent]. Raw deltas and
+ * recoverable "buffer too small" noise stay out of the public event stream.
  */
 internal class RealtimeLiveSessionHandle(
     private val cache: AudioChunkCache,
     private val onEvent: (RealtimeTranscriptEvent) -> Unit,
-    private val makeSession: suspend () -> RealtimeWebSocketSession,
+    private val makeSession: suspend (Long) -> RealtimeWebSocketSession,
+    private val strategy: VoiceFlowRecordingStrategy,
+    private val model: String,
 ) : RealtimeLiveTranscriptionSession {
 
     private val mutex = Mutex()
+    private val audioMutex = Mutex()
     private var session: RealtimeWebSocketSession? = null
+    private var generationCounter = INITIAL_GENERATION
+    private var ownedGeneration: Long? = INITIAL_GENERATION
+    private val initialConnection = CompletableDeferred<Unit>()
     private var isRecovering = false
     private var phase: RealtimeConnectionPhase = RealtimeConnectionPhase.Connecting
 
@@ -48,7 +54,8 @@ internal class RealtimeLiveSessionHandle(
     private var finalizeSignal: CompletableDeferred<Unit>? = null
     private var finalizeText = FinalizeTranscriptAccumulator()
     private var finalizePartialCallback: ((String) -> Unit)? = null
-    private var hasPreservedAudio = false
+    private var audioDisposition = AudioDisposition.Active
+    private var preservedAudio: VoiceFlowPreservedAudio? = null
     private var isTerminated = false
 
     override suspend fun connectionPhase(): RealtimeConnectionPhase = mutex.withLock { phase }
@@ -58,9 +65,12 @@ internal class RealtimeLiveSessionHandle(
      * (normally nothing on a fresh start) and adopts it as the live session.
      * Mirrors Swift `attachInitialSession`.
      */
-    suspend fun attachInitialSession(newSession: RealtimeWebSocketSession) {
+    suspend fun attachInitialSession(
+        newSession: RealtimeWebSocketSession,
+        generation: Long = INITIAL_GENERATION,
+    ) {
         val shouldAttach = mutex.withLock {
-            if (isTerminated || session != null || isRecovering) {
+            if (isTerminated || session != null || isRecovering || ownedGeneration != generation) {
                 false
             } else {
                 isRecovering = true
@@ -70,92 +80,159 @@ internal class RealtimeLiveSessionHandle(
         }
         if (!shouldAttach) {
             newSession.close()
+            initialConnection.completeExceptionally(
+                RealtimeTranscriptionError.SessionUnavailable,
+            )
             return
         }
+        var attached = false
         try {
-            replayCache(newSession)
-            mutex.withLock {
-                session = newSession
-                phase = RealtimeConnectionPhase.Connected
+            audioMutex.withLock {
+                replayCache(newSession)
+                mutex.withLock {
+                    if (!isTerminated && ownedGeneration == generation) {
+                        session = newSession
+                        phase = if (isFinalizing) {
+                            RealtimeConnectionPhase.Generating
+                        } else {
+                            RealtimeConnectionPhase.Connected
+                        }
+                        attached = true
+                    }
+                }
+            }
+            if (attached) {
+                initialConnection.complete(Unit)
+            } else {
+                newSession.close()
+                initialConnection.completeExceptionally(
+                    RealtimeTranscriptionError.SessionUnavailable,
+                )
             }
         } catch (error: CancellationException) {
+            initialConnection.completeExceptionally(error)
             throw error
         } catch (error: Exception) {
             Log.e(TAG, "Initial attach replay failed", error)
             newSession.close()
+            mutex.withLock {
+                if (ownedGeneration == generation) ownedGeneration = null
+            }
+            initialConnection.completeExceptionally(error)
             onEvent(RealtimeTranscriptEvent.RecoveryFailed(error.toString()))
         } finally {
             mutex.withLock { isRecovering = false }
         }
     }
 
+    suspend fun failInitialConnection(generation: Long, error: Throwable): Boolean {
+        val accepted = mutex.withLock {
+            if (ownedGeneration != generation || initialConnection.isCompleted) {
+                false
+            } else {
+                ownedGeneration = null
+                phase = RealtimeConnectionPhase.Disconnected
+                true
+            }
+        }
+        if (accepted) initialConnection.completeExceptionally(error)
+        return accepted
+    }
+
     override suspend fun appendAudioChunk(chunk: ByteArray) {
         if (chunk.isEmpty()) return
-        if (mutex.withLock { hasPreservedAudio || isTerminated }) return
-        cache.append(chunk)
-        val activeSession = mutex.withLock { if (isRecovering) null else session } ?: return
-        try {
-            activeSession.sendAudioChunk(chunk)
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Exception) {
-            recover(error)
+        var recoveryReason: Throwable? = null
+        var failedGeneration: Long? = null
+        audioMutex.withLock {
+            if (mutex.withLock {
+                    audioDisposition != AudioDisposition.Active || isTerminated || isFinalizing
+                }
+            ) {
+                return
+            }
+            cache.append(chunk)
+            val active = mutex.withLock {
+                if (isRecovering) null else session?.let { it to ownedGeneration }
+            } ?: return
+            try {
+                active.first.sendAudioChunk(chunk)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                recoveryReason = error
+                failedGeneration = active.second
+            }
         }
+        recoveryReason?.let { recover(it, expectedGeneration = failedGeneration) }
     }
 
     override suspend fun heartbeat() {
         if (mutex.withLock { isTerminated }) return
-        val activeSession = mutex.withLock { if (isRecovering) null else session } ?: return
+        val active = mutex.withLock {
+            if (isRecovering) null else session?.let { it to ownedGeneration }
+        } ?: return
         try {
-            activeSession.ping()
+            active.first.ping()
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            recover(error)
+            recover(error, expectedGeneration = active.second)
         }
     }
 
     /**
      * Commit the buffered audio and wait for the server to produce the final
-     * transcript. Port of Swift `finalize`: two attempts, a per-attempt 30 s
-     * timeout, an audio-sync sanity check, and transcript preservation between
-     * attempts.
+     * transcript. GPT Realtime gets one recovery retry; GPT Live gets exactly one
+     * attempt because replaying a consumed paced turn requires an explicit host action.
      */
     override suspend fun finalize(onPartialTranscript: ((String) -> Unit)?): String {
-        mutex.withLock {
-            isFinalizing = true
-            finalizeText.reset()
-            finalizePartialCallback = onPartialTranscript
-            phase = RealtimeConnectionPhase.Generating
+        audioMutex.withLock {
+            mutex.withLock {
+                isFinalizing = true
+                if (strategy != VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE) {
+                    finalizeText.reset()
+                }
+                finalizePartialCallback = onPartialTranscript
+                phase = RealtimeConnectionPhase.Generating
+            }
         }
 
         var lastError: Throwable = RealtimeTranscriptionError.EmptyTranscript
         try {
-            val maxAttempts = 2
+            val maxAttempts = if (strategy == VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE) 1 else 2
             for (attempt in 0 until maxAttempts) {
+                if (strategy != VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE) {
+                    mutex.withLock { finalizeText.reset() }
+                }
                 ensureSessionReadyForFinalize()
-                var activeSession = mutex.withLock { session }
+                var active = mutex.withLock {
+                    session?.let { it to ownedGeneration }
+                }
                     ?: throw RealtimeTranscriptionError.SessionUnavailable
 
-                // The cache holds enough audio to commit, but the *current socket*
-                // never received it (e.g. it was opened during a recovery and the
-                // replay is still catching up). Force a fresh recover+replay so the
-                // server has the full stream before we commit.
-                if (cache.byteCount >= RealtimeTranscriptionConfig.minCommitAudioBytes &&
-                    activeSession.pendingCommitAudioBytes < RealtimeTranscriptionConfig.minCommitAudioBytes
-                ) {
+                // Commit only when this socket received exactly the stable cache.
+                // Any mismatch forces a fresh full replay before finalization.
+                if (active.first.pendingCommitAudioBytes != cache.byteCount) {
                     recover(
                         RealtimeTranscriptionError.ConnectionLost(
                             "Audio not fully synced before finalize",
                         ),
+                        expectedGeneration = active.second,
                     )
                     ensureSessionReadyForFinalize()
-                    activeSession = mutex.withLock { session }
+                    active = mutex.withLock {
+                        session?.let { it to ownedGeneration }
+                    }
                         ?: throw RealtimeTranscriptionError.SessionUnavailable
+                    if (active.first.pendingCommitAudioBytes != cache.byteCount) {
+                        throw RealtimeTranscriptionError.ConnectionLost(
+                            "Audio byte count does not match cache before finalize",
+                        )
+                    }
                 }
 
                 try {
-                    waitForFinalizeResult(activeSession)
+                    waitForFinalizeResult(active.first, active.second)
                     val resolved = mutex.withLock { finalizeText.resolvedText }
                     if (resolved.trim().isNotEmpty()) {
                         terminate(removeCache = true)
@@ -169,13 +246,10 @@ internal class RealtimeLiveSessionHandle(
                 }
 
                 if (attempt < maxAttempts - 1) {
-                    val preserved = mutex.withLock { finalizeText.preserveForRetry() }
-                    recover(lastError)
-                    if (preserved.trim().isNotEmpty()) {
-                        mutex.withLock { finalizeText.restoreAfterRetry(preserved) }
-                    }
+                    recover(lastError, expectedGeneration = active.second)
                 }
             }
+            terminate(removeCache = false)
             throw lastError
         } finally {
             mutex.withLock {
@@ -187,70 +261,93 @@ internal class RealtimeLiveSessionHandle(
     }
 
     override suspend fun cancel() {
-        val shouldRemoveCache = mutex.withLock { !hasPreservedAudio }
-        mutex.withLock {
-            isTerminated = true
-            session?.close()
-            session = null
-            phase = RealtimeConnectionPhase.Disconnected
+        var sessionToClose: RealtimeWebSocketSession? = null
+        val shouldRemoveCache = mutex.withLock {
+            when (audioDisposition) {
+                AudioDisposition.Preserved,
+                AudioDisposition.Cancelled,
+                -> false
+
+                AudioDisposition.Active -> {
+                    audioDisposition = AudioDisposition.Cancelled
+                    isTerminated = true
+                    ownedGeneration = null
+                    sessionToClose = session
+                    session = null
+                    phase = RealtimeConnectionPhase.Disconnected
+                    true
+                }
+            }
         }
+        initialConnection.completeExceptionally(CancellationException("Session cancelled"))
+        sessionToClose?.close()
         if (shouldRemoveCache) cache.remove()
     }
 
     override suspend fun abortPreservingAudio(): VoiceFlowPreservedAudio? {
-        mutex.withLock {
-            isTerminated = true
-            session?.close()
-            session = null
-            isRecovering = false
-            phase = RealtimeConnectionPhase.Disconnected
-            if (isFinalizing) {
-                completeFinalize(Result.failure(RealtimeTranscriptionError.ConnectionLost("Session aborted")))
+        var sessionToClose: RealtimeWebSocketSession? = null
+        var removeEmptyCache = false
+        val preserved = mutex.withLock {
+            when (audioDisposition) {
+                AudioDisposition.Cancelled -> null
+                AudioDisposition.Preserved -> preservedAudio
+                AudioDisposition.Active -> {
+                    val value = cache.preservedAudio(strategy, model)
+                    audioDisposition = if (value == null) {
+                        removeEmptyCache = true
+                        AudioDisposition.Cancelled
+                    } else {
+                        preservedAudio = value
+                        AudioDisposition.Preserved
+                    }
+                    isTerminated = true
+                    ownedGeneration = null
+                    sessionToClose = session
+                    session = null
+                    isRecovering = false
+                    phase = RealtimeConnectionPhase.Disconnected
+                    if (isFinalizing) {
+                        completeFinalize(
+                            Result.failure(
+                                RealtimeTranscriptionError.ConnectionLost("Session aborted"),
+                            ),
+                        )
+                    }
+                    value
+                }
             }
         }
-        val preserved = cache.preservedAudio()
-        if (preserved == null) {
-            cache.remove()
-            return null
-        }
-        mutex.withLock { hasPreservedAudio = true }
+        initialConnection.completeExceptionally(CancellationException("Session aborted"))
+        sessionToClose?.close()
+        if (removeEmptyCache) cache.remove()
         return preserved
     }
 
     private suspend fun terminate(removeCache: Boolean) {
+        var sessionToClose: RealtimeWebSocketSession? = null
         mutex.withLock {
             isTerminated = true
-            session?.close()
+            ownedGeneration = null
+            sessionToClose = session
             session = null
             isRecovering = false
             phase = RealtimeConnectionPhase.Disconnected
+            if (removeCache) audioDisposition = AudioDisposition.Cancelled
         }
+        sessionToClose?.close()
         if (removeCache) cache.remove()
     }
 
-    /** Receive a server event for state bookkeeping (called by the owning client). */
-    suspend fun ingestServerEvent(event: RealtimeTranscriptEvent) {
-        handleServerEvent(event)
-    }
-
-    /**
-     * Whether [event] should be forwarded to the UI. Port of Swift `shouldNotifyUI`:
-     * text deltas only surface during finalize; recoverable "buffer too small"
-     * errors are suppressed unless finalizing.
-     */
-    suspend fun shouldNotifyUI(event: RealtimeTranscriptEvent): Boolean = mutex.withLock {
-        when (event) {
-            is RealtimeTranscriptEvent.TextDelta -> isFinalizing
-            is RealtimeTranscriptEvent.ErrorEvent ->
-                isFinalizing ||
-                    !RealtimeTranscriptionSupport.isRecoverableBufferTooSmallError(event.message)
-            else -> true
-        }
-    }
+    /** Receive one event only if its socket still owns this handle. */
+    suspend fun ingestServerEvent(
+        generation: Long,
+        event: RealtimeTranscriptEvent,
+    ): Boolean = handleServerEvent(generation, event)
 
     // --- internals ---------------------------------------------------------
 
     private suspend fun ensureSessionReadyForFinalize() {
+        initialConnection.await()
         waitForRecovery()
         if (mutex.withLock { session == null }) {
             recover(
@@ -264,16 +361,24 @@ internal class RealtimeLiveSessionHandle(
     }
 
     /**
-     * Send `commit` and race the resulting finalize signal against a 30 s timeout.
+     * Send `commit` and race the resulting finalize signal against its deadline.
      * The signal is completed from [handleServerEvent] when the server reports
      * idle / disconnect / error.
      */
-    private suspend fun waitForFinalizeResult(activeSession: RealtimeWebSocketSession) {
+    private suspend fun waitForFinalizeResult(
+        activeSession: RealtimeWebSocketSession,
+        generation: Long?,
+    ) {
         val signal = CompletableDeferred<Unit>()
-        mutex.withLock { finalizeSignal = signal }
+        mutex.withLock {
+            if (ownedGeneration != generation || session !== activeSession) {
+                throw RealtimeTranscriptionError.SessionUnavailable
+            }
+            finalizeSignal = signal
+        }
         activeSession.sendCommit()
         try {
-            withTimeout(RealtimeTranscriptionConfig.FINALIZE_TIMEOUT_MS) {
+            withTimeout(RealtimeTranscriptionConfig.finalizeTimeoutMs(strategy, cache.byteCount)) {
                 signal.await()
             }
         } catch (timeout: TimeoutCancellationException) {
@@ -293,29 +398,40 @@ internal class RealtimeLiveSessionHandle(
             .onFailure { signal.completeExceptionally(it) }
     }
 
-    private suspend fun handleServerEvent(event: RealtimeTranscriptEvent) {
-        when (event) {
-            is RealtimeTranscriptEvent.Status -> when (event.status) {
-                RealtimeServerStatus.Connected, RealtimeServerStatus.Connecting ->
-                    mutex.withLock { if (!isFinalizing) phase = RealtimeConnectionPhase.Connected }
+    private suspend fun handleServerEvent(
+        generation: Long,
+        event: RealtimeTranscriptEvent,
+    ): Boolean {
+        var shouldRecover = false
+        var recordingTranscriptSnapshot: String? = null
+        val shouldNotify = mutex.withLock {
+            if (ownedGeneration != generation) return false
+            when (event) {
+                is RealtimeTranscriptEvent.Status -> {
+                    when (event.status) {
+                        RealtimeServerStatus.Connected, RealtimeServerStatus.Connecting ->
+                            if (!isFinalizing) phase = RealtimeConnectionPhase.Connected
 
-                RealtimeServerStatus.Generating ->
-                    mutex.withLock { phase = RealtimeConnectionPhase.Generating }
+                        RealtimeServerStatus.Generating ->
+                            phase = RealtimeConnectionPhase.Generating
 
-                RealtimeServerStatus.Idle -> mutex.withLock {
-                    phase = RealtimeConnectionPhase.Disconnected
-                    if (isFinalizing) {
-                        if (finalizeText.resolvedText.trim().isEmpty()) {
-                            completeFinalize(Result.failure(RealtimeTranscriptionError.EmptyTranscript))
-                        } else {
-                            completeFinalize(Result.success(Unit))
+                        RealtimeServerStatus.Idle -> {
+                            phase = RealtimeConnectionPhase.Disconnected
+                            if (isFinalizing) {
+                                if (finalizeText.resolvedText.trim().isEmpty()) {
+                                    completeFinalize(
+                                        Result.failure(RealtimeTranscriptionError.EmptyTranscript),
+                                    )
+                                } else {
+                                    completeFinalize(Result.success(Unit))
+                                }
+                            }
                         }
                     }
+                    true
                 }
-            }
 
-            is RealtimeTranscriptEvent.Disconnected -> {
-                val shouldRecover = mutex.withLock {
+                is RealtimeTranscriptEvent.Disconnected -> {
                     phase = RealtimeConnectionPhase.Disconnected
                     if (isFinalizing) {
                         completeFinalize(
@@ -323,52 +439,58 @@ internal class RealtimeLiveSessionHandle(
                                 RealtimeTranscriptionError.ConnectionLost("WebSocket disconnected"),
                             ),
                         )
-                        false
                     } else {
-                        true
+                        shouldRecover = true
                     }
+                    true
                 }
-                if (shouldRecover) {
-                    recover(RealtimeTranscriptionError.ConnectionLost("WebSocket disconnected"))
-                }
-            }
 
-            is RealtimeTranscriptEvent.ErrorEvent -> mutex.withLock {
-                val recoverable =
-                    RealtimeTranscriptionSupport.isRecoverableBufferTooSmallError(event.message)
-                if (recoverable && !isFinalizing) {
-                    // Swallow: a transient "buffer too small" outside finalize is noise.
-                } else if (isFinalizing) {
-                    completeFinalize(
-                        Result.failure(RealtimeTranscriptionError.WebsocketError(event.message)),
-                    )
+                is RealtimeTranscriptEvent.ErrorEvent -> {
+                    val recoverable =
+                        RealtimeTranscriptionSupport.isRecoverableBufferTooSmallError(event.message)
+                    if (isFinalizing) {
+                        completeFinalize(
+                            Result.failure(RealtimeTranscriptionError.WebsocketError(event.message)),
+                        )
+                    }
+                    isFinalizing || !recoverable
                 }
-            }
 
-            is RealtimeTranscriptEvent.TextDelta -> {
-                val callback: ((String) -> Unit)?
-                val snapshot: String?
-                mutex.withLock {
-                    if (!isFinalizing || event.content.isEmpty()) {
-                        callback = null
-                        snapshot = null
-                    } else {
+                is RealtimeTranscriptEvent.TextDelta -> {
+                    if (event.content.isNotEmpty() &&
+                        (isFinalizing || strategy == VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE)
+                    ) {
                         if (event.isNewResponse) {
                             finalizeText.setCompleted(event.content)
                         } else {
                             finalizeText.appendDelta(event.content)
                         }
-                        snapshot = finalizeText.resolvedText
-                        callback = finalizePartialCallback
+                        val snapshot = finalizeText.resolvedText
+                        if (isFinalizing) {
+                            finalizePartialCallback?.invoke(snapshot)
+                        } else {
+                            recordingTranscriptSnapshot = snapshot
+                        }
                     }
+                    false
                 }
-                if (callback != null && snapshot != null) callback(snapshot)
-            }
 
-            RealtimeTranscriptEvent.RecoveryStarted,
-            is RealtimeTranscriptEvent.RecoveryFailed,
-            -> Unit
+                RealtimeTranscriptEvent.RecoveryStarted,
+                is RealtimeTranscriptEvent.RecoveryFailed,
+                -> true
+            }
         }
+        recordingTranscriptSnapshot?.let { snapshot ->
+            // Publish one accumulated snapshot instead of exposing raw wire fragments.
+            onEvent(RealtimeTranscriptEvent.TextDelta(snapshot, isNewResponse = true))
+        }
+        if (shouldRecover) {
+            recover(
+                RealtimeTranscriptionError.ConnectionLost("WebSocket disconnected"),
+                expectedGeneration = generation,
+            )
+        }
+        return shouldNotify
     }
 
     /**
@@ -376,14 +498,29 @@ internal class RealtimeLiveSessionHandle(
      * concurrent failures don't stack. On exhaustion the phase goes Disconnected and
      * a `RecoveryFailed` event is emitted. Port of Swift `recover`.
      */
-    private suspend fun recover(reason: Throwable) {
-        if (mutex.withLock { hasPreservedAudio || isTerminated }) return
+    private suspend fun recover(
+        reason: Throwable,
+        expectedGeneration: Long? = null,
+    ) {
+        if (mutex.withLock {
+                audioDisposition != AudioDisposition.Active || isTerminated ||
+                    (expectedGeneration != null && ownedGeneration != expectedGeneration)
+            }
+        ) {
+            return
+        }
         val oldSession = mutex.withLock {
-            if (isRecovering || isTerminated) return
+            if (isRecovering || isTerminated ||
+                audioDisposition != AudioDisposition.Active ||
+                (expectedGeneration != null && ownedGeneration != expectedGeneration)
+            ) {
+                return
+            }
             isRecovering = true
             phase = RealtimeConnectionPhase.Recovering
             val current = session
             session = null
+            ownedGeneration = null
             current
         }
         onEvent(RealtimeTranscriptEvent.RecoveryStarted)
@@ -398,19 +535,48 @@ internal class RealtimeLiveSessionHandle(
                 delay(delayMs)
             }
             try {
-                val replacement = makeSession()
-                replayCache(replacement)
-                mutex.withLock {
-                    session = replacement
-                    phase = RealtimeConnectionPhase.Connected
-                    isRecovering = false
+                val generation = mutex.withLock {
+                    if (isTerminated || audioDisposition != AudioDisposition.Active) return
+                    generationCounter += 1
+                    generationCounter.also { ownedGeneration = it }
+                }
+                val replacement = makeSession(generation)
+                try {
+                    audioMutex.withLock {
+                        replayCache(replacement)
+                        mutex.withLock {
+                            if (!isTerminated &&
+                                audioDisposition == AudioDisposition.Active &&
+                                ownedGeneration == generation
+                            ) {
+                                session = replacement
+                                phase = if (isFinalizing) {
+                                    RealtimeConnectionPhase.Generating
+                                } else {
+                                    RealtimeConnectionPhase.Connected
+                                }
+                            } else {
+                                throw RealtimeTranscriptionError.SessionUnavailable
+                            }
+                            isRecovering = false
+                        }
+                    }
+                } catch (error: Throwable) {
+                    replacement.close()
+                    throw error
                 }
                 Log.d(TAG, "Recovery done bytes=${cache.byteCount}")
                 return
             } catch (error: CancellationException) {
-                mutex.withLock { isRecovering = false }
+                mutex.withLock {
+                    isRecovering = false
+                    ownedGeneration = null
+                }
                 throw error
             } catch (error: Exception) {
+                mutex.withLock {
+                    if (session == null) ownedGeneration = null
+                }
                 lastError = error
             }
         }
@@ -418,24 +584,22 @@ internal class RealtimeLiveSessionHandle(
         mutex.withLock {
             phase = RealtimeConnectionPhase.Disconnected
             isRecovering = false
+            ownedGeneration = null
         }
         onEvent(RealtimeTranscriptEvent.RecoveryFailed(lastError.toString()))
     }
 
     /**
-     * Replay the disk cache into [targetSession] from byte 0. Reads
-     * [RealtimeTranscriptionConfig.REPLAY_CHUNK_SIZE] windows; when it catches up to
-     * the live tail it waits briefly for more audio rather than returning, matching
-     * Swift's `replayCache` (which only returns once `offset >= byteCount`).
+     * Replay the disk cache into [targetSession] from byte 0. The caller holds
+     * [audioMutex], so reaching [AudioChunkCache.byteCount] is a stable handoff point:
+     * the replacement is installed before any later append can proceed.
      */
     private suspend fun replayCache(targetSession: RealtimeWebSocketSession) {
         var offset = 0
         while (true) {
             val chunk = cache.readChunk(offset, RealtimeTranscriptionConfig.REPLAY_CHUNK_SIZE)
             if (chunk.isEmpty()) {
-                if (offset >= cache.byteCount) return
-                delay(20)
-                continue
+                return
             }
             targetSession.sendAudioChunk(chunk)
             offset += chunk.size
@@ -448,7 +612,14 @@ internal class RealtimeLiveSessionHandle(
         }
     }
 
-    private companion object {
+    internal companion object {
         private const val TAG = "VFLiveSessionHandle"
+        const val INITIAL_GENERATION = 1L
+    }
+
+    private enum class AudioDisposition {
+        Active,
+        Cancelled,
+        Preserved,
     }
 }

@@ -78,12 +78,16 @@ protocol、同一套常量、同一套断线恢复语义。差异只在语言/�
 
 ## 工作模式
 
-库支持两种工作模式，对齐 iOS 版：
+库支持 live streaming 与 bulk 两种调用模式，以及三种完整录音策略：
 
-1. **Live streaming**（推荐，默认）：`client.startSession()` → 边录音边收 partial →
-   `session.commitAndStop()` 拿 final。Latency 低，体验好。
-2. **Bulk**：`client.transcribe(wavFile)` 一次性转写已有 WAV 文件，走同一条 WebSocket
-   协议（无实时 sleep），返回 `TranscriptionResult(text, requestId)`。
+1. **GPT Realtime**（默认）：`client.startSession()` 或
+   `client.startSession(OPENAI_REALTIME)`；model 继续取 `VoiceFlowConfig.model`。
+2. **GPT Live Transcribe**：`client.startSession(GPT_LIVE_TRANSCRIBE)`；固定路由到
+   `gpt-live-transcribe`，与 GPT Realtime 共用 PCM / ticket WebSocket。
+3. **Grok Batch**：录音期只落本地文件，Stop 后 multipart 上传。
+
+两个 realtime strategy 都可用 `client.transcribe(wavFile, strategy)` bulk 转写，不做客户端
+1x pacing；`TranscriptionResult` 返回最终 text 与 requestId。
 
 ## 转写上下文（prompt + terms）
 
@@ -140,7 +144,8 @@ Host 可通过 `VoiceFlowConfig.endpoint` 换成兼容 backend。`RealtimeApiUrl
   cache 累积后按 `REPLAY_CHUNK_SIZE` bulk 重放。
 - **server error / 持久重连失败**：录音中 recoverable 的 "buffer too small" error 被
   库内部过滤掉；重试耗尽则 `phase=Disconnected` + emit `RecoveryFailed`。
-- **finalize**：等待 recover 完成后再 commit；30s 超时；带 2 次重试
+- **finalize**：等待 recover 完成后再 commit；GPT Realtime 保持 30s 超时，GPT Live 使用
+  `max(60s, pcmSeconds + 60s)`；带 2 次重试
   （`preserveForRetry` / `restoreAfterRetry`）；resolved 为空映射为 `EmptyTranscript`。
 - **正常结束**（connected/generating → idle）：返回最终 transcript。
 - **bulk resend**：走 `transcribeBulkPcm`，不按录音时长做实时重放。
@@ -158,7 +163,8 @@ Host 可通过 `VoiceFlowConfig.endpoint` 换成兼容 backend。`RealtimeApiUrl
 | maxRecoverAttempts | 5 |
 | recoverBackoffBaseMs | 300 |
 | silenceDurationMs | 1200 |
-| finalizeTimeoutMs | 30000 |
+| GPT Realtime finalizeTimeoutMs | 30000 |
+| GPT Live finalizeTimeoutMs | max(60000, pcmBytes / 48000 * 1000 + 60000) |
 
 这些值与 iOS 仓库 `RealtimeTranscriptionConfig` 一致，不得擅自改动。
 

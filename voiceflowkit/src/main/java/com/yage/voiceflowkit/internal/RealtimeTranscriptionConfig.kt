@@ -45,6 +45,12 @@ internal object RealtimeTranscriptionConfig {
     /** Upper bound for awaiting a finalize result (commit -> completed -> stopped). */
     const val FINALIZE_TIMEOUT_MS: Long = 30_000L
 
+    /** PCM16 mono 24 kHz bytes per second. */
+    const val PCM_BYTES_PER_SECOND: Long = SAMPLE_RATE * 2L
+
+    private const val GPT_LIVE_MIN_TIMEOUT_MS: Long = 60_000L
+    private const val GPT_LIVE_TIMEOUT_MARGIN_MS: Long = 60_000L
+
     /** Content-Type for JSON request bodies. */
     const val JSON_MEDIA_TYPE: String = "application/json; charset=utf-8"
 
@@ -70,4 +76,15 @@ internal object RealtimeTranscriptionConfig {
      */
     val minCommitAudioBytes: Int
         get() = (SAMPLE_RATE * 0.1).toInt() * 2
+
+    fun finalizeTimeoutMs(
+        strategy: com.yage.voiceflowkit.VoiceFlowRecordingStrategy,
+        pcmBytes: Int,
+    ): Long {
+        if (strategy != com.yage.voiceflowkit.VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE) {
+            return FINALIZE_TIMEOUT_MS
+        }
+        val audioDurationMs = pcmBytes.toLong().coerceAtLeast(0L) * 1_000L / PCM_BYTES_PER_SECOND
+        return maxOf(GPT_LIVE_MIN_TIMEOUT_MS, audioDurationMs + GPT_LIVE_TIMEOUT_MARGIN_MS)
+    }
 }

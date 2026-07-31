@@ -1,6 +1,7 @@
 package com.yage.voiceflowkit.internal
 
 import android.util.Log
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.WebSocket
@@ -20,8 +21,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * - sending the `start` control frame, raw PCM16 binary chunks, `commit` and `stop`;
  * - parsing inbound frames into [RealtimeTranscriptEvent]s and pushing them to
  *   [onEvent];
- * - auto-sending `stop` once a `transcript_completed` arrives after a `commit`
- *   (matches both Swift `receiveLoop` and opencode's `commitAndStop` loop).
+ * - auto-sending `stop` once the strategy's required completion events arrive
+ *   after a `commit`.
  *
  * The Swift code serialized all sends through a dedicated `RealtimeWebSocketSender`
  * actor. On Android OkHttp's `WebSocket.send` is already thread-safe and buffers
@@ -31,11 +32,18 @@ import java.util.concurrent.atomic.AtomicBoolean
 internal class RealtimeWebSocketSession(
     private val webSocket: WebSocket,
     private val onEvent: (RealtimeTranscriptEvent) -> Unit,
+    private val onEventsClosed: () -> Unit = {},
+    private val requiresTurnCompletedBeforeStop: Boolean = false,
 ) {
     private val sendMutex = Mutex()
     private val closed = AtomicBoolean(false)
     private val committed = AtomicBoolean(false)
     private val shouldSendStopAfterCompleted = AtomicBoolean(false)
+    private val transcriptCompleted = AtomicBoolean(false)
+    private val turnCompleted = AtomicBoolean(false)
+    private val stopSent = AtomicBoolean(false)
+    private val stopSendFailed = AtomicBoolean(false)
+    private val transportEnded = AtomicBoolean(false)
 
     @Volatile
     private var enqueuedAudioBytes = 0
@@ -48,19 +56,28 @@ internal class RealtimeWebSocketSession(
      * Handle one inbound text/binary frame. Wired into the OkHttp
      * [okhttp3.WebSocketListener] by the factory that builds this session.
      *
-     * Mirrors Swift `receiveLoop`: detect `transcript_completed` and (if we have
-     * already committed) auto-send `stop`, then translate the frame into a
-     * [RealtimeTranscriptEvent] via [RealtimeMessageParser] and deliver it.
+     * Tracks transcript/turn completion and, after commit, auto-sends `stop` once
+     * the strategy's requirements are met. The frame is then translated via
+     * [RealtimeMessageParser] and delivered as a [RealtimeTranscriptEvent].
      */
     fun onMessage(text: String) {
         try {
             val json = JSONObject(text)
             val type = json.optString("type")
-            if (type == "transcript_completed" &&
-                shouldSendStopAfterCompleted.compareAndSet(true, false)
-            ) {
-                // Fire-and-forget; the socket may already be winding down.
-                runCatching { webSocket.send(RealtimeTranscriptionConfig.STOP_MESSAGE) }
+            if (type == "transcript_completed") transcriptCompleted.set(true)
+            if (type == "turn_completed") turnCompleted.set(true)
+            sendStopIfReady()
+            if (type == "session_stopped" && !hasValidTerminalSequence()) {
+                onEvent(
+                    RealtimeTranscriptEvent.ErrorEvent(
+                        if (stopSendFailed.get()) {
+                            "Session stopped after the stop event failed to send"
+                        } else {
+                            "Session stopped before all terminal events and a successful stop"
+                        },
+                    ),
+                )
+                return
             }
             val event = RealtimeMessageParser.parseSocketEvent(json) ?: return
             onEvent(event)
@@ -72,8 +89,9 @@ internal class RealtimeWebSocketSession(
 
     /** Called by the listener when the transport fails or the socket closes unexpectedly. */
     fun onTransportFailure() {
-        if (!closed.get()) {
+        if (closed.compareAndSet(false, true) && transportEnded.compareAndSet(false, true)) {
             onEvent(RealtimeTranscriptEvent.Disconnected)
+            onEventsClosed()
         }
     }
 
@@ -95,6 +113,14 @@ internal class RealtimeWebSocketSession(
     suspend fun sendAudioChunk(chunk: ByteArray) {
         if (chunk.isEmpty() || committed.get() || closed.get()) return
         sendMutex.withLock {
+            while (!closed.get() &&
+                webSocket.queueSize() + chunk.size > MAX_QUEUED_BYTES
+            ) {
+                delay(QUEUE_BACKPRESSURE_POLL_MS)
+            }
+            if (closed.get()) {
+                throw RealtimeTranscriptionError.ConnectionLost("WebSocket connection is closed")
+            }
             if (!webSocket.send(chunk.toByteString())) {
                 throw RealtimeTranscriptionError.WebsocketError("Failed to send audio chunk")
             }
@@ -120,16 +146,22 @@ internal class RealtimeWebSocketSession(
         shouldSendStopAfterCompleted.set(true)
         sendMutex.withLock {
             if (!webSocket.send(RealtimeTranscriptionConfig.COMMIT_MESSAGE)) {
+                shouldSendStopAfterCompleted.set(false)
                 throw RealtimeTranscriptionError.WebsocketError("Failed to send commit event")
             }
         }
+        sendStopIfReady()
     }
 
     /** Send the `stop` control frame. No-op if already closed. */
     suspend fun sendStop() {
         if (closed.get()) return
         sendMutex.withLock {
-            webSocket.send(RealtimeTranscriptionConfig.STOP_MESSAGE)
+            if (!webSocket.send(RealtimeTranscriptionConfig.STOP_MESSAGE)) {
+                stopSendFailed.set(true)
+                throw RealtimeTranscriptionError.WebsocketError("Failed to send stop event")
+            }
+            stopSent.set(true)
         }
     }
 
@@ -149,10 +181,37 @@ internal class RealtimeWebSocketSession(
     fun close() {
         if (!closed.compareAndSet(false, true)) return
         webSocket.cancel()
-        onEvent(RealtimeTranscriptEvent.Disconnected)
+        if (transportEnded.compareAndSet(false, true)) {
+            onEvent(RealtimeTranscriptEvent.Disconnected)
+        }
+        onEventsClosed()
     }
+
+    private fun sendStopIfReady() {
+        if (!transcriptCompleted.get()) return
+        if (requiresTurnCompletedBeforeStop && !turnCompleted.get()) return
+        if (shouldSendStopAfterCompleted.compareAndSet(true, false)) {
+            val sent = runCatching {
+                webSocket.send(RealtimeTranscriptionConfig.STOP_MESSAGE)
+            }.getOrDefault(false)
+            if (sent) {
+                stopSent.set(true)
+            } else {
+                stopSendFailed.set(true)
+                onEvent(RealtimeTranscriptEvent.ErrorEvent("Failed to send stop event"))
+            }
+        }
+    }
+
+    private fun hasValidTerminalSequence(): Boolean =
+        transcriptCompleted.get() &&
+            (!requiresTurnCompletedBeforeStop || turnCompleted.get()) &&
+            stopSent.get() &&
+            !stopSendFailed.get()
 
     private companion object {
         private const val TAG = "VFRealtimeWSSession"
+        internal const val MAX_QUEUED_BYTES = 1_048_576L
+        private const val QUEUE_BACKPRESSURE_POLL_MS = 5L
     }
 }

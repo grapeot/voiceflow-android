@@ -46,18 +46,13 @@ internal object RealtimeTranscriptionSupport {
      * Picks the transcript to surface at finalize given the live [partial] and the server's
      * [completed] payload.
      *
-     * Mirrors Swift `resolveFinalizeTranscript` exactly:
-     * - if the trimmed partial is empty, use the trimmed completed text;
-     * - if the trimmed completed is empty, use the (untrimmed) partial;
-     * - otherwise prefer whichever trimmed text is longer, returning the original (untrimmed)
-     *   partial when it wins and the trimmed completed when it wins.
+     * A nonblank `transcript_completed` payload is authoritative. Partial text is
+     * used only until completion or when the completion payload is blank.
      */
     fun resolveFinalizeTranscript(partial: String, completed: String?): String {
         val trimmedPartial = partial.trim()
         val trimmedCompleted = completed?.trim().orEmpty()
-        if (trimmedPartial.isEmpty()) return trimmedCompleted
-        if (trimmedCompleted.isEmpty()) return partial
-        return if (trimmedPartial.length >= trimmedCompleted.length) partial else trimmedCompleted
+        return if (trimmedCompleted.isNotEmpty()) trimmedCompleted else partial
     }
 }
 
@@ -97,12 +92,4 @@ internal class FinalizeTranscriptAccumulator {
         completedText = content
     }
 
-    /** Snapshot the resolved text so it survives a recover-and-retry. */
-    fun preserveForRetry(): String = resolvedText
-
-    /** Seed the next attempt with text preserved from the previous one. */
-    fun restoreAfterRetry(text: String) {
-        partialText = text
-        completedText = null
-    }
 }

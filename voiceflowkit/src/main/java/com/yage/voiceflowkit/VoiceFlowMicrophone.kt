@@ -99,7 +99,7 @@ class VoiceFlowMicrophone(
     /**
      * Start capturing with the default OpenAI realtime strategy.
      * Prefer [start] with an explicit [VoiceFlowRecordingStrategy] when the
-     * host supports dual strategies.
+     * host exposes multiple strategies.
      */
     suspend fun start(
         persist: Boolean = false,
@@ -115,8 +115,8 @@ class VoiceFlowMicrophone(
     /**
      * Start capturing for the selected complete recording strategy.
      *
-     * Both strategies currently capture PCM16 / 24 kHz / mono for metering and
-     * local persistence. OpenAI hosts still stream chunks live; Grok hosts must
+     * All strategies currently capture PCM16 / 24 kHz / mono for metering and
+     * local persistence. Realtime hosts still stream chunks live; Grok hosts must
      * not open a realtime session and only upload after [stop].
      *
      * Android V0 of Grok Batch persists WAV (Grok STT accepts WAV). AAC-LC M4A
@@ -129,6 +129,26 @@ class VoiceFlowMicrophone(
         strategy: VoiceFlowRecordingStrategy,
         persist: Boolean = true,
         onPCMChunk: ((ByteArray) -> Unit)? = null,
+    ) {
+        startCapture(strategy, persist) { chunk -> onPCMChunk?.invoke(chunk) }
+    }
+
+    /**
+     * Start capture with a suspending PCM consumer. Unlike [start], this lets a host
+     * apply bounded backpressure all the way to the microphone read loop.
+     */
+    suspend fun startWithBackpressure(
+        strategy: VoiceFlowRecordingStrategy,
+        persist: Boolean = true,
+        onPCMChunk: suspend (ByteArray) -> Unit,
+    ) {
+        startCapture(strategy, persist, onPCMChunk)
+    }
+
+    private suspend fun startCapture(
+        strategy: VoiceFlowRecordingStrategy,
+        persist: Boolean,
+        onPCMChunk: suspend (ByteArray) -> Unit,
     ) {
         if (!hasPermission()) {
             throw VoiceFlowError.MicrophoneUnavailable
@@ -150,7 +170,7 @@ class VoiceFlowMicrophone(
                     val raw = VoiceFlowAudioMetering.normalizedLevel(chunk)
                     smoothedLevel = smoothedLevel * 0.7f + raw * 0.3f
                     _audioLevel.tryEmit(smoothedLevel)
-                    onPCMChunk?.invoke(chunk)
+                    onPCMChunk(chunk)
                 },
                 onError = {
                     scope.cancel()
@@ -169,9 +189,9 @@ class VoiceFlowMicrophone(
      * recording is benign and returns null, matching Swift.
      */
     suspend fun stop(): File? {
+        val file = recorder.stop()
         captureScope?.cancel()
         captureScope = null
-        val file = recorder.stop()
         recordingFile = file
         return file
     }

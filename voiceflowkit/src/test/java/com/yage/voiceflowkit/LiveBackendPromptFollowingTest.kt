@@ -70,6 +70,32 @@ class LiveBackendPromptFollowingTest {
             uppercaseWords.size >= 2,
         )
     }
+
+    @Test
+    fun gptLiveTranscribeReturnsTextForFixture() {
+        val credentials = LiveBackendCredentials.resolve()
+        assumeTrue(
+            "Set VOICEFLOW_LIVE_WS=1 and AI_BUILDER_TOKEN to run the live test",
+            credentials != null,
+        )
+        credentials!!
+
+        val client = VoiceFlowClient(
+            VoiceFlowConfig(
+                endpoint = credentials.endpoint,
+                tokenProvider = { credentials.token },
+            ),
+        )
+        val transcript = runBlocking {
+            client.transcribe(
+                audioFile = LiveBackendFixtures.allCapsTtsWav(),
+                strategy = VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE,
+            ).text.trim()
+        }
+
+        System.err.println("[live:gpt-live-transcribe] backend transcript: $transcript")
+        assertTrue("GPT Live transcript came back empty", transcript.isNotEmpty())
+    }
 }
 
 /**
