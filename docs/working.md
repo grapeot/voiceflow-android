@@ -2,6 +2,11 @@
 
 ## Changelog
 
+### 2026-07-31 (VoiceFlowKit 0.4.0 release prep)
+
+- Bumped the library Maven version, public `VoiceFlowKit.VERSION`, documented JitPack pin, and reference App metadata to `0.4.0` (`versionCode` 5). The release includes GPT Live Transcribe and accumulated recording-time transcript snapshots.
+- Verification: Kit/App unit tests, Kit debug assembly, and signed reference App release assembly passed.
+
 ### 2026-07-31 (GPT Live default strategy)
 
 - New installations now default to GPT Live Transcribe when no recording strategy has been saved. Existing valid choices and the established unknown-value compatibility fallback remain unchanged.
