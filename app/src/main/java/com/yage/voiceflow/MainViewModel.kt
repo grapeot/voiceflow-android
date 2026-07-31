@@ -201,7 +201,7 @@ data class UiState(
     // --- Transcription settings ---
     val prompt: String = "",
     val terms: String = "",
-    val recordingStrategy: VoiceFlowRecordingStrategy = VoiceFlowRecordingStrategy.OPENAI_REALTIME,
+    val recordingStrategy: VoiceFlowRecordingStrategy = VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE,
 
     // --- Language ---
     val language: AppLanguage = AppLanguage.System,
@@ -351,11 +351,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Strategy that produced [lastRecordingFile]; resend must not use the current picker. */
     private var lastRecordingStrategy: VoiceFlowRecordingStrategy =
-        VoiceFlowRecordingStrategy.OPENAI_REALTIME
+        VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE
 
     /** Snapshot of Settings strategy for the in-flight recording. */
     private var activeRecordingStrategy: VoiceFlowRecordingStrategy =
-        VoiceFlowRecordingStrategy.OPENAI_REALTIME
+        VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE
 
     /** True while the user has hand-edited the transcript mid-stream. */
     private var userEditedTranscriptDuringStream = false

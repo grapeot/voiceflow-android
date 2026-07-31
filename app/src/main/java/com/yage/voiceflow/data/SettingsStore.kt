@@ -127,11 +127,13 @@ class SettingsStore internal constructor(
         }
 
     /**
-     * Complete capture/transport strategy. Defaults to OpenAI Realtime.
+     * Complete capture/transport strategy. Defaults to GPT Live Transcribe.
      * Unknown raw values fall back to OpenAI Realtime.
      */
     var recordingStrategy: VoiceFlowRecordingStrategy
-        get() = VoiceFlowRecordingStrategy.fromRaw(plain.getString(KEY_RECORDING_STRATEGY, null))
+        get() = plain.getString(KEY_RECORDING_STRATEGY, null)?.let {
+            VoiceFlowRecordingStrategy.fromRaw(it)
+        } ?: VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE
         set(value) {
             plain.edit().putString(KEY_RECORDING_STRATEGY, value.name).apply()
         }

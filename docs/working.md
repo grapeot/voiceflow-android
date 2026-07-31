@@ -2,6 +2,11 @@
 
 ## Changelog
 
+### 2026-07-31 (GPT Live default strategy)
+
+- New installations now default to GPT Live Transcribe when no recording strategy has been saved. Existing valid choices and the established unknown-value compatibility fallback remain unchanged.
+- Verification: Kit/App unit tests and debug assemblies passed with Android Studio JBR.
+
 ### 2026-07-31 (GPT Live recording-time transcript snapshots)
 
 - GPT Live now retains `transcript_delta` frames received before Stop and publishes accumulated snapshots through `VoiceFlowSession.events`; raw wire fragments remain internal. Finalize preserves the same accumulator and still treats `transcript_completed` as authoritative.

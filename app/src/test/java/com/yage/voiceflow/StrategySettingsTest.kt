@@ -28,9 +28,9 @@ class StrategySettingsTest {
     }
 
     @Test
-    fun `settings default and unknown values remain GPT Realtime`() {
+    fun `settings defaults to GPT Live while unknown values remain GPT Realtime`() {
         assertEquals(
-            VoiceFlowRecordingStrategy.OPENAI_REALTIME,
+            VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE,
             settingsStore(mutableMapOf()).recordingStrategy,
         )
         assertEquals(
