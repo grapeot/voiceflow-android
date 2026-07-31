@@ -202,19 +202,14 @@ fun SettingsScreen(
                         color = DesignTokens.Palette.textPrimary,
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Box(
+                    Icon(
+                        Icons.Default.Info,
+                        contentDescription = stringRes(R.string.settings_transcription_strategy_dialog_title),
+                        tint = DesignTokens.Palette.accent,
                         modifier = Modifier
-                            .size(20.dp)
+                            .size(18.dp)
                             .clickable { showStrategyHelp = true },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            Icons.Default.Info,
-                            contentDescription = stringRes(R.string.settings_transcription_strategy_dialog_title),
-                            tint = DesignTokens.Palette.accent,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    }
+                    )
                 }
                 val strategies = listOf(
                     VoiceFlowRecordingStrategy.OPENAI_REALTIME to R.string.settings_transcription_strategy_openai,
@@ -234,32 +229,28 @@ fun SettingsScreen(
                         }
                     }
                 }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(22.dp)
-                            .background(DesignTokens.Palette.accent, CircleShape)
-                            .clickable { showStrategyHelp = true },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            Icons.Default.Info,
-                            contentDescription = stringRes(R.string.settings_transcription_strategy_dialog_title),
-                            tint = Color.White,
-                            modifier = Modifier.size(14.dp),
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        stringRes(R.string.settings_transcription_strategy_help),
-                        style = DesignTokens.Typography.captionSub,
-                        color = DesignTokens.Palette.accent,
-                        modifier = Modifier.clickable { showStrategyHelp = true },
+                if (state.recordingStrategy == VoiceFlowRecordingStrategy.OPENAI_REALTIME) {
+                    FieldLabel(stringRes(R.string.settings_transcription_prompt))
+                    OutlinedTextField(
+                        value = state.prompt,
+                        onValueChange = viewModel::updatePrompt,
+                        placeholder = { Text(stringRes(R.string.settings_transcription_prompt_placeholder)) },
+                        minLines = 2,
+                        maxLines = 4,
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                        modifier = Modifier.fillMaxWidth(),
                     )
                 }
+                FieldLabel(stringRes(R.string.settings_transcription_terms))
+                OutlinedTextField(
+                    value = state.terms,
+                    onValueChange = viewModel::updateTerms,
+                    placeholder = { Text(stringRes(R.string.settings_transcription_terms_placeholder)) },
+                    minLines = 2,
+                    maxLines = 4,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None),
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 if (showStrategyHelp) {
                     AlertDialog(
                         onDismissRequest = { showStrategyHelp = false },
