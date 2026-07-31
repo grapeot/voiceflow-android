@@ -2,7 +2,7 @@
 
 ## Changelog
 
-### 2026-07-30 (OpenAI Realtime / Grok Batch dual strategies)
+### 2026-07-30 (OpenAI Realtime / Grok STT dual strategies)
 
 - Kit exposes `VoiceFlowRecordingStrategy` (`OPENAI_REALTIME` / `GROK_BATCH`), strategy-aware `VoiceFlowClient.transcribe(audioFile, strategy)` and `VoiceFlowMicrophone.start(strategy, ...)`.
 - Grok path: no realtime session during capture; multipart `POST /v1/audio/grok-transcription` after Stop with `audio_file` + optional `terms` (no prompt). Android currently persists WAV for the upload file; Grok STT accepts WAV. AAC-LC M4A parity with iOS can follow without API break.

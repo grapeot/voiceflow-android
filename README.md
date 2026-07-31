@@ -47,7 +47,7 @@ composer. The kit is sized and shaped by that real consumer, not by the demo.
 Two complete recording strategies:
 
 - **OpenAI Realtime** — PCM16 / 24 kHz live WebSocket path (existing)
-- **Grok Batch** — local capture during record, multipart upload to `/v1/audio/grok-transcription` after Stop (terms only; no prompt). Android currently persists WAV for the Grok upload path; Grok STT accepts WAV.
+- **Grok STT** — local capture during record, multipart upload to `/v1/audio/grok-transcription` after Stop (terms only; no prompt). Android currently persists WAV for the Grok upload path; Grok STT accepts WAV.
 
 Pin hosts to exact SemVer `0.3.0` via JitPack.
 
