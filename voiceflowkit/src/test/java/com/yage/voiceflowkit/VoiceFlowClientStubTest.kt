@@ -16,8 +16,8 @@ import org.junit.Test
 class VoiceFlowClientStubTest {
 
     @Test
-    fun `module exposes a non-empty version`() {
-        assertTrue(VoiceFlowKit.VERSION.isNotEmpty())
+    fun `module exposes the release version`() {
+        assertEquals("0.4.0", VoiceFlowKit.VERSION)
     }
 
     @Test

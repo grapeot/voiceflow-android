@@ -10,5 +10,5 @@ package com.yage.voiceflowkit
  */
 object VoiceFlowKit {
     /** Library version. Kept in lockstep with the Swift package. */
-    const val VERSION: String = "0.3.0"
+    const val VERSION: String = "0.4.0"
 }

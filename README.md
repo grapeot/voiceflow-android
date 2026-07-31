@@ -49,7 +49,7 @@ Two complete recording strategies:
 - **OpenAI Realtime** — PCM16 / 24 kHz live WebSocket path (existing)
 - **Grok STT** — local capture during record, multipart upload to `/v1/audio/grok-transcription` after Stop (terms only; no prompt). Android currently persists WAV for the Grok upload path; Grok STT accepts WAV.
 
-Pin hosts to exact SemVer `0.3.0` via JitPack.
+Pin hosts to exact SemVer `0.4.0` via JitPack.
 
 
 
@@ -85,7 +85,7 @@ Then depend on the tag from the host app module's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("com.github.grapeot:voiceflow-android:0.3.0")
+    implementation("com.github.grapeot:voiceflow-android:0.4.0")
 }
 ```
 
