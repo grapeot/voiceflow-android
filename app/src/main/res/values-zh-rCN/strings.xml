@@ -7,6 +7,7 @@
     matching the English adaptation.
 -->
 <resources>
+    <string name="ok">确定</string>
     <string name="app_name">VoiceFlow</string>
     <string name="permission_microphone_rationale">VoiceFlow 使用麦克风录制音频并进行转写。</string>
     <string name="shortcut_start_record_short">录音</string>
@@ -107,6 +108,12 @@
 
     <string name="settings_transcription_title">转写设置</string>
     <string name="settings_transcription_description">可选的提示，转写前会传给模型。可以用自然语言写明语言、术语或上下文。</string>
+    <string name="settings_transcription_model">录音模型</string>
+    <string name="settings_transcription_strategy_openai">GPT Realtime</string>
+    <string name="settings_transcription_strategy_grok">Grok STT</string>
+    <string name="settings_transcription_strategy_help">我该选哪个？</string>
+    <string name="settings_transcription_strategy_dialog_title">我该选哪个？</string>
+    <string name="settings_transcription_strategy_dialog_body">GPT Realtime——排版、标点和准确率更好，说话时能看到实时字幕。\n\nGrok STT——价格约为前者的 1/10，准确率略低，无实时字幕；本地录音，停止后上传。\n\n建议：给人看的内容（笔记、消息、文章）用 GPT Realtime；给 AI 处理的内容（指令、prompt、日志）用 Grok STT 就够——AI 对错别字和排版的包容度比人高得多。</string>
     <string name="settings_transcription_prompt">上下文提示</string>
     <string name="settings_transcription_prompt_placeholder">例如：把每个英文单词转写为全大写。例：THIS IS A TEST.</string>
     <string name="settings_transcription_terms">术语字典</string>

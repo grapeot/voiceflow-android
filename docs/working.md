@@ -2,6 +2,15 @@
 
 ## Changelog
 
+### 2026-07-30 (OpenAI Realtime / Grok STT dual strategies)
+
+- Kit exposes `VoiceFlowRecordingStrategy` (`OPENAI_REALTIME` / `GROK_BATCH`), strategy-aware `VoiceFlowClient.transcribe(audioFile, strategy)` and `VoiceFlowMicrophone.start(strategy, ...)`.
+- Grok path: no realtime session during capture; multipart `POST /v1/audio/grok-transcription` after Stop with `audio_file` + optional `terms` (no prompt). Android currently persists WAV for the upload file; Grok STT accepts WAV. AAC-LC M4A parity with iOS can follow without API break.
+- Connection test aligned with iOS 0.3.0: `GET /v1/usage/summary` Bearer, require 2xx.
+- Reference app: Settings segmented strategy picker (prompt hidden for Grok but value retained), Start snapshots strategy, resend uses originating strategy, Grok waveform uses connected accent without WebSocket.
+- `VoiceFlowKit.VERSION` / library Maven version set to `0.3.0`.
+- Unit coverage: strategy routing mock, multipart body/terms contract via MockWebServer, usage-summary connection test.
+
 ### 2026-06-28
 
 - 新增信号质量门控（signal quality gate），对齐 iOS PR #62。解决静音录音时 OpenAI Realtime 幻觉转写的问题。核心机制：在 `microphone.start` 的 `onPCMChunk` 回调里用 `VoiceFlowAudioMetering.rmsLevel()` 累加 `peakRms` 和 `activeAudioMs`。Stop 时按三档置信度决定行为：Tier 1（`activeAudioMs < 100ms`，无信号）不发 `commitAndStop`，弹 alert，幻觉从源头消失；Tier 2（`activeAudioMs < 1500ms`，短音频）正常 commit，transcript 上方挂持久弱警告文字（`textSecondary` 色 + `caption` 字号，无背景块，对齐 design.md 的"无边框、无卡片"原则）；Tier 3（`activeAudioMs >= 1500ms`，正常）无提示。录音中还有一层实时反馈：grace window 后如果 `activeAudioMs < 1`，caption 显示"未检测到声音输入"，检测到信号后清除。

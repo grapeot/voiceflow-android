@@ -1,7 +1,9 @@
 package com.yage.voiceflow.ui.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -10,10 +12,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
@@ -33,6 +42,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yage.voiceflow.MainViewModel
 import com.yage.voiceflow.R
@@ -42,6 +52,7 @@ import com.yage.voiceflow.model.AppLanguage
 import com.yage.voiceflow.model.ConnectionTestStatus
 import com.yage.voiceflow.ui.theme.DesignTokens
 import com.yage.voiceflowkit.VoiceFlowConfig
+import com.yage.voiceflowkit.VoiceFlowRecordingStrategy
 
 /**
  * The Settings tab. Faithful Material port of the iOS `SettingsView`, section
@@ -180,16 +191,56 @@ fun SettingsScreen(
                     style = DesignTokens.Typography.captionSub,
                     color = DesignTokens.Palette.textTertiary,
                 )
-                FieldLabel(stringRes(R.string.settings_transcription_prompt))
-                OutlinedTextField(
-                    value = state.prompt,
-                    onValueChange = viewModel::updatePrompt,
-                    placeholder = { Text(stringRes(R.string.settings_transcription_prompt_placeholder)) },
-                    minLines = 2,
-                    maxLines = 4,
-                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                var showStrategyHelp by rememberSaveable { mutableStateOf(false) }
+                Row(
                     modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringRes(R.string.settings_transcription_model),
+                        style = DesignTokens.Typography.bodyBold,
+                        color = DesignTokens.Palette.textPrimary,
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Icon(
+                        Icons.Default.Info,
+                        contentDescription = stringRes(R.string.settings_transcription_strategy_dialog_title),
+                        tint = DesignTokens.Palette.accent,
+                        modifier = Modifier
+                            .size(18.dp)
+                            .clickable { showStrategyHelp = true },
+                    )
+                }
+                val strategies = listOf(
+                    VoiceFlowRecordingStrategy.OPENAI_REALTIME to R.string.settings_transcription_strategy_openai,
+                    VoiceFlowRecordingStrategy.GROK_BATCH to R.string.settings_transcription_strategy_grok,
                 )
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    strategies.forEachIndexed { index, (strategy, labelRes) ->
+                        SegmentedButton(
+                            selected = state.recordingStrategy == strategy,
+                            onClick = { viewModel.updateRecordingStrategy(strategy) },
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index = index,
+                                count = strategies.size,
+                            ),
+                        ) {
+                            Text(stringRes(labelRes))
+                        }
+                    }
+                }
+                if (state.recordingStrategy == VoiceFlowRecordingStrategy.OPENAI_REALTIME) {
+                    FieldLabel(stringRes(R.string.settings_transcription_prompt))
+                    OutlinedTextField(
+                        value = state.prompt,
+                        onValueChange = viewModel::updatePrompt,
+                        placeholder = { Text(stringRes(R.string.settings_transcription_prompt_placeholder)) },
+                        minLines = 2,
+                        maxLines = 4,
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 FieldLabel(stringRes(R.string.settings_transcription_terms))
                 OutlinedTextField(
                     value = state.terms,
@@ -200,6 +251,23 @@ fun SettingsScreen(
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None),
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (showStrategyHelp) {
+                    AlertDialog(
+                        onDismissRequest = { showStrategyHelp = false },
+                        title = { Text(stringRes(R.string.settings_transcription_strategy_dialog_title)) },
+                        text = {
+                            Text(
+                                stringRes(R.string.settings_transcription_strategy_dialog_body),
+                                style = DesignTokens.Typography.captionSub,
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { showStrategyHelp = false }) {
+                                Text(stringRes(R.string.ok))
+                            }
+                        },
+                    )
+                }
             }
         }
 

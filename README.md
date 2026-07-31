@@ -44,6 +44,15 @@ composer. The kit is sized and shaped by that real consumer, not by the demo.
 
 ## VoiceFlowKit (the library)
 
+Two complete recording strategies:
+
+- **OpenAI Realtime** — PCM16 / 24 kHz live WebSocket path (existing)
+- **Grok STT** — local capture during record, multipart upload to `/v1/audio/grok-transcription` after Stop (terms only; no prompt). Android currently persists WAV for the Grok upload path; Grok STT accepts WAV.
+
+Pin hosts to exact SemVer `0.3.0` via JitPack.
+
+
+
 ### Identity
 
 - Maven coordinates: group `com.yage`, artifact `voiceflowkit`
@@ -76,7 +85,7 @@ Then depend on the tag from the host app module's `build.gradle.kts`:
 
 ```kotlin
 dependencies {
-    implementation("com.github.grapeot:voiceflow-android:0.1.0")
+    implementation("com.github.grapeot:voiceflow-android:0.3.0")
 }
 ```
 

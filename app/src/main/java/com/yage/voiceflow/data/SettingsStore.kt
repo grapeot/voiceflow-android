@@ -7,6 +7,7 @@ import androidx.security.crypto.MasterKey
 import com.yage.voiceflow.model.AppLanguage
 import com.yage.voiceflow.service.OpenCodeClient
 import com.yage.voiceflowkit.VoiceFlowConfig
+import com.yage.voiceflowkit.VoiceFlowRecordingStrategy
 
 /**
  * Persistence for all VoiceFlow settings.
@@ -125,6 +126,16 @@ class SettingsStore private constructor(
             plain.edit().putString(KEY_TERMS, value).apply()
         }
 
+    /**
+     * Complete capture/transport strategy. Defaults to OpenAI Realtime.
+     * Unknown raw values fall back to OpenAI Realtime.
+     */
+    var recordingStrategy: VoiceFlowRecordingStrategy
+        get() = VoiceFlowRecordingStrategy.fromRaw(plain.getString(KEY_RECORDING_STRATEGY, null))
+        set(value) {
+            plain.edit().putString(KEY_RECORDING_STRATEGY, value.name).apply()
+        }
+
     // --- UI language preference (non-secret; UI display ONLY — bug #1/#2) ---
 
     var language: AppLanguage
@@ -171,6 +182,7 @@ class SettingsStore private constructor(
         private const val KEY_OPENCODE_CONNECTION_VERIFIED = "opencode_connection_verified"
         private const val KEY_PROMPT = "transcription_prompt"
         private const val KEY_TERMS = "transcription_terms"
+        private const val KEY_RECORDING_STRATEGY = "recording_strategy"
         private const val KEY_LANGUAGE = "app_language"
 
         fun create(context: Context): SettingsStore {

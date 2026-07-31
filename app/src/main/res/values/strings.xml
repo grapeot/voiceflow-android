@@ -9,6 +9,7 @@
     and the %1$s file-name argument.
 -->
 <resources>
+    <string name="ok">OK</string>
     <string name="app_name">VoiceFlow</string>
     <string name="permission_microphone_rationale">VoiceFlow uses the microphone to record audio for transcription.</string>
     <string name="shortcut_start_record_short">Record</string>
@@ -109,6 +110,12 @@
 
     <string name="settings_transcription_title">Transcription</string>
     <string name="settings_transcription_description">Optional hints the transcription model reads before working. Include language, vocabulary, or context in plain language.</string>
+    <string name="settings_transcription_model">Transcription model</string>
+    <string name="settings_transcription_strategy_openai">GPT Realtime</string>
+    <string name="settings_transcription_strategy_grok">Grok STT</string>
+    <string name="settings_transcription_strategy_help">Which one should I choose?</string>
+    <string name="settings_transcription_strategy_dialog_title">Which one should I choose?</string>
+    <string name="settings_transcription_strategy_dialog_body">GPT Realtime — better formatting, punctuation, and accuracy. Shows a live transcript while you speak.\n\nGrok STT — about 10x cheaper, slightly lower accuracy, no live transcript. Records locally and uploads after Stop.\n\nRecommendation: For content a human will read (notes, messages, articles), prefer GPT Realtime. For content an AI agent will process (commands, prompts, logs), Grok STT is usually good enough — AI tolerates typos and messy formatting far better than people do.</string>
     <string name="settings_transcription_prompt">Context prompt</string>
     <string name="settings_transcription_prompt_placeholder">e.g. Transcribe every word in ALL CAPS. Example: THIS IS A TEST.</string>
     <string name="settings_transcription_terms">Terms</string>
