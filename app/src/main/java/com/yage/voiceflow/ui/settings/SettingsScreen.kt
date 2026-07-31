@@ -200,6 +200,11 @@ fun SettingsScreen(
                         }
                     }
                 }
+                Text(
+                    stringRes(R.string.settings_transcription_strategy_help),
+                    style = DesignTokens.Typography.captionSub,
+                    color = DesignTokens.Palette.textTertiary,
+                )
                 if (state.recordingStrategy == VoiceFlowRecordingStrategy.GROK_BATCH) {
                     Text(
                         stringRes(R.string.settings_transcription_strategy_grok_hint),

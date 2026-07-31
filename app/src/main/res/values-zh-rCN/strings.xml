@@ -110,7 +110,8 @@
     <string name="settings_transcription_strategy">录音策略</string>
     <string name="settings_transcription_strategy_openai">OpenAI Realtime</string>
     <string name="settings_transcription_strategy_grok">Grok STT</string>
-    <string name="settings_transcription_strategy_grok_hint">Grok 仅在本地录音，停止后才上传。上下文提示不会发送；术语字典仍然生效。</string>
+    <string name="settings_transcription_strategy_grok_hint">Grok STT 仅在本地录音，停止后才上传。上下文提示不会发送；术语字典仍然生效。</string>
+    <string name="settings_transcription_strategy_help">OpenAI Realtime：排版与准确率更好。Grok STT：价格约为前者的 1/10，准确率略低，无实时字幕。两者都走你的 AI Builder 令牌。</string>
     <string name="settings_transcription_prompt">上下文提示</string>
     <string name="settings_transcription_prompt_placeholder">例如：把每个英文单词转写为全大写。例：THIS IS A TEST.</string>
     <string name="settings_transcription_terms">术语字典</string>
