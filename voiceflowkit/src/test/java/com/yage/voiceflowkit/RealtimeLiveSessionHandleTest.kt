@@ -1,6 +1,7 @@
 package com.yage.voiceflowkit
 
 import com.yage.voiceflowkit.internal.AudioChunkCache
+import com.yage.voiceflowkit.internal.RealtimeConnectionPhase
 import com.yage.voiceflowkit.internal.RealtimeLiveSessionHandle
 import com.yage.voiceflowkit.internal.RealtimeTranscriptEvent
 import com.yage.voiceflowkit.internal.RealtimeTranscriptionConfig
@@ -99,6 +100,59 @@ class RealtimeLiveSessionHandleTest {
             ),
         )
         handle.cancel()
+        directory.deleteRecursively()
+        Unit
+    }
+
+    @Test
+    fun `recording deltas remain accumulated across GPT Live finalize`() = runBlocking {
+        val directory = Files.createTempDirectory("voiceflow-live-snapshot-test").toFile()
+        val cache = AudioChunkCache(directory)
+        val publicSnapshots = mutableListOf<String>()
+        val finalizeSnapshots = mutableListOf<String>()
+        val handle = RealtimeLiveSessionHandle(
+            cache = cache,
+            onEvent = { event ->
+                if (event is RealtimeTranscriptEvent.TextDelta) publicSnapshots += event.content
+            },
+            makeSession = { RealtimeWebSocketSession(socket { true }, onEvent = {}) },
+            strategy = VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE,
+            model = "gpt-live-transcribe",
+        )
+        handle.attachInitialSession(RealtimeWebSocketSession(socket { true }, onEvent = {}))
+        handle.appendAudioChunk(ByteArray(RealtimeTranscriptionConfig.minCommitAudioBytes))
+
+        handle.ingestServerEvent(
+            RealtimeLiveSessionHandle.INITIAL_GENERATION,
+            RealtimeTranscriptEvent.TextDelta("The first ", false),
+        )
+        handle.ingestServerEvent(
+            RealtimeLiveSessionHandle.INITIAL_GENERATION,
+            RealtimeTranscriptEvent.TextDelta("sentence.", false),
+        )
+        val finalize = async {
+            handle.finalize { snapshot -> finalizeSnapshots += snapshot }
+        }
+        while (handle.connectionPhase() != RealtimeConnectionPhase.Generating) yield()
+        handle.ingestServerEvent(
+            RealtimeLiveSessionHandle.INITIAL_GENERATION,
+            RealtimeTranscriptEvent.TextDelta(" Final", false),
+        )
+        handle.ingestServerEvent(
+            RealtimeLiveSessionHandle.INITIAL_GENERATION,
+            RealtimeTranscriptEvent.TextDelta("Authoritative full transcript.", true),
+        )
+        handle.ingestServerEvent(
+            RealtimeLiveSessionHandle.INITIAL_GENERATION,
+            RealtimeTranscriptEvent.Status(com.yage.voiceflowkit.internal.RealtimeServerStatus.Idle),
+        )
+
+        assertEquals(listOf("The first ", "The first sentence."), publicSnapshots)
+        assertEquals(
+            listOf("The first sentence. Final", "Authoritative full transcript."),
+            finalizeSnapshots,
+        )
+        assertEquals("Authoritative full transcript.", finalize.await())
         directory.deleteRecursively()
         Unit
     }

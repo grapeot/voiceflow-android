@@ -189,7 +189,9 @@ internal class RealtimeLiveSessionHandle(
         audioMutex.withLock {
             mutex.withLock {
                 isFinalizing = true
-                finalizeText.reset()
+                if (strategy != VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE) {
+                    finalizeText.reset()
+                }
                 finalizePartialCallback = onPartialTranscript
                 phase = RealtimeConnectionPhase.Generating
             }
@@ -199,7 +201,9 @@ internal class RealtimeLiveSessionHandle(
         try {
             val maxAttempts = if (strategy == VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE) 1 else 2
             for (attempt in 0 until maxAttempts) {
-                mutex.withLock { finalizeText.reset() }
+                if (strategy != VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE) {
+                    mutex.withLock { finalizeText.reset() }
+                }
                 ensureSessionReadyForFinalize()
                 var active = mutex.withLock {
                     session?.let { it to ownedGeneration }
@@ -399,6 +403,7 @@ internal class RealtimeLiveSessionHandle(
         event: RealtimeTranscriptEvent,
     ): Boolean {
         var shouldRecover = false
+        var recordingTranscriptSnapshot: String? = null
         val shouldNotify = mutex.withLock {
             if (ownedGeneration != generation) return false
             when (event) {
@@ -452,13 +457,20 @@ internal class RealtimeLiveSessionHandle(
                 }
 
                 is RealtimeTranscriptEvent.TextDelta -> {
-                    if (isFinalizing && event.content.isNotEmpty()) {
+                    if (event.content.isNotEmpty() &&
+                        (isFinalizing || strategy == VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE)
+                    ) {
                         if (event.isNewResponse) {
                             finalizeText.setCompleted(event.content)
                         } else {
                             finalizeText.appendDelta(event.content)
                         }
-                        finalizePartialCallback?.invoke(finalizeText.resolvedText)
+                        val snapshot = finalizeText.resolvedText
+                        if (isFinalizing) {
+                            finalizePartialCallback?.invoke(snapshot)
+                        } else {
+                            recordingTranscriptSnapshot = snapshot
+                        }
                     }
                     false
                 }
@@ -467,6 +479,10 @@ internal class RealtimeLiveSessionHandle(
                 is RealtimeTranscriptEvent.RecoveryFailed,
                 -> true
             }
+        }
+        recordingTranscriptSnapshot?.let { snapshot ->
+            // Publish one accumulated snapshot instead of exposing raw wire fragments.
+            onEvent(RealtimeTranscriptEvent.TextDelta(snapshot, isNewResponse = true))
         }
         if (shouldRecover) {
             recover(

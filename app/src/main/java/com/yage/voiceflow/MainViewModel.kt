@@ -1145,11 +1145,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun handleStreamEvent(event: VoiceFlowEvent) {
         when (event) {
             is VoiceFlowEvent.PartialTranscript -> {
-                // iOS ignores stream deltas while status is .recording (the live
-                // transcript only updates during finalize / generating).
-                if (_state.value.recordingStatus == RecordingStatus.Recording) return
+                if (_state.value.recordingStatus == RecordingStatus.Recording &&
+                    activeRecordingStrategy != VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE
+                ) return
                 if (!userEditedTranscriptDuringStream) {
-                    _state.update { it.copy(transcript = event.text) }
+                    _state.update { current ->
+                        current.copy(transcript = applyStreamedTranscript(current.transcript, event.text))
+                    }
                 }
             }
 

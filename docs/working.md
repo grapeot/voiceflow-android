@@ -2,6 +2,11 @@
 
 ## Changelog
 
+### 2026-07-31 (GPT Live recording-time transcript snapshots)
+
+- GPT Live now retains `transcript_delta` frames received before Stop and publishes accumulated snapshots through `VoiceFlowSession.events`; raw wire fragments remain internal. Finalize preserves the same accumulator and still treats `transcript_completed` as authoritative.
+- The reference app displays these snapshots during GPT Live recording while preserving GPT Realtime's existing recording-time suppression. A deterministic handle test covers recording deltas, the Stop boundary, and final snapshot replacement. Verification: focused handle tests plus full Kit/App JVM tests and debug assembles passed.
+
 ### 2026-07-31 (GPT Live Transcribe)
 
 - Added `GPT_LIVE_TRANSCRIBE` with stable raw-value parsing and realtime capability. The existing no-argument `startSession()` and `OPENAI_REALTIME` continue using `VoiceFlowConfig.model`; only GPT Live pins `gpt-live-transcribe`.
