@@ -37,7 +37,7 @@ import com.yage.voiceflowkit.VoiceFlowRecordingStrategy
  * preferable to crashing on launch. `allowBackup=false` in the manifest keeps
  * the keystore and the encrypted file from drifting apart.
  */
-class SettingsStore private constructor(
+class SettingsStore internal constructor(
     private val secure: SharedPreferences,
     private val plain: SharedPreferences,
 ) {

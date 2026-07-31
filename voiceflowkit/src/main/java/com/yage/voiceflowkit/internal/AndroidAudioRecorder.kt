@@ -6,8 +6,9 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -134,10 +135,10 @@ internal class AndroidAudioRecorder(
      * returns null. Mirrors Swift `stopRecording()` writing PCM via the
      * WAV writer.
      */
-    fun stop(): File? {
+    suspend fun stop(): File? {
         val recorder = audioRecord ?: return null
         audioRecord = null
-        captureJob?.cancel()
+        val job = captureJob
         captureJob = null
 
         try {
@@ -148,6 +149,9 @@ internal class AndroidAudioRecorder(
             recorder.release()
             Log.d(TAG, "Realtime PCM capture stopped")
         }
+        // PCM is persisted before onChunk runs. Cancel a stalled consumer so Stop
+        // remains finite while the complete local recording stays available.
+        job?.cancelAndJoin()
 
         val pcm = pcmBuffer?.toByteArray()
         pcmBuffer = null

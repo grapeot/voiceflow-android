@@ -38,6 +38,11 @@ sealed class VoiceFlowError(message: String? = null) : Exception(message) {
     /** The session could not be established (no WS URL / ticket). */
     data object SessionUnavailable : VoiceFlowError("Session unavailable")
 
+    /** The selected strategy cannot be used by the requested operation. */
+    data class UnsupportedStrategy(
+        val strategy: VoiceFlowRecordingStrategy,
+    ) : VoiceFlowError("Unsupported recording strategy: ${strategy.name}")
+
     /** A WebSocket-level protocol or transport error. */
     data class WebsocketError(val detail: String) : VoiceFlowError(detail)
 

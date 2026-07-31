@@ -206,8 +206,10 @@ internal constructor 接受注入，public constructor 默认 new prod 实现。
    `Context` 单测。
 2. **RealtimeWebSocketSession**：单条 live WS 连接，在 `session_ready` 握手后才构造。
    OkHttp `WebSocket` + `WebSocketListener` 把 parse 后的 event 推给 `onEvent` 回调，
-   检测到 `transcript_completed` 自动发 `stop`。`sendAudioChunk` 由 `Mutex` 串行化
-   （= Swift `RealtimeWebSocketSender`），committed/closed 后 no-op，记 enqueued 字节。
+   GPT Realtime 检测到 `transcript_completed` 自动发 `stop`；GPT Live 等
+   `turn_completed` 后再发。`sendAudioChunk` 由 `Mutex` 串行化（= Swift
+   `RealtimeWebSocketSender`），committed/closed 后 no-op，记 enqueued 字节，并通过
+   1 MiB OkHttp queue 上限施加 backpressure（不按音频时长 sleep）。
    `sendCommit` 守 `minCommitAudioBytes=4800`（不足抛 `WebsocketError`）。`ping`
    检查 closed flag，已关抛 `ConnectionLost`。
 3. **RealtimeLiveSessionHandle**：recovery / finalize orchestrator。持 `AudioChunkCache`、
@@ -222,7 +224,8 @@ internal constructor 接受注入，public constructor 默认 new prod 实现。
    - `replayCache`：按 `REPLAY_CHUNK_SIZE` 窗口读，追上 live tail 时 `delay(20)`。
    - `finalize(onPartial)`：2 次重试循环 —— `ensureSessionReadyForFinalize`（等
      `!isRecovering`，session 为 null 则 recover）→ cache-vs-pendingCommitAudioBytes
-     resync → `waitForFinalizeResult`（30s 超时，racing idle/disconnect/error 信号）→
+      resync → `waitForFinalizeResult`（GPT Realtime 30s；GPT Live
+      `max(60s, pcmSeconds + 60s)`，racing idle/disconnect/error 信号）→
      `preserveForRetry` / `restoreAfterRetry`；resolved 为空映射 `EmptyTranscript`。
    - `ingestServerEvent` / `shouldNotifyUI`：复刻 Swift 的 finalize-aware 过滤（非
      finalize 期抑制 textDelta；非 finalize 期抑制 recoverable "buffer too small" error）。
@@ -241,7 +244,8 @@ internal constructor 接受注入，public constructor 默认 new prod 实现。
 ### bulk 路径
 
 `transcribeBulkPcm`：一条 session，按 `REPLAY_CHUNK_SIZE` 步进发 PCM，`sendCommit`，
-轮询 `BulkTranscriptionProgress` 直到 finished 或 30s。`BulkTranscriptionProgress`
+轮询 `BulkTranscriptionProgress` 直到 finished 或 strategy deadline。deadline 到达但只有
+partial 时抛 timeout，不把 partial 当 final。`BulkTranscriptionProgress`
 （`Mutex` 守护）按 `TranscriptDeltaReducer` 累积，`Status(Idle)` 置 finished；
 **关键顺序修正** —— 一旦 finished，忽略后续 textDelta，绝不用 trailing disconnect/error
 覆盖成功结果（对齐 iOS PR #34 的 race 修复）。
@@ -263,7 +267,8 @@ Content-Type: application/json
 保留 ticket query。打开 WebSocket（ticket 在 query 里，升级不带 Bearer），等
 `{"type":"session_ready"}`，发 text 控制 `{"type":"start","model":...,"vad":false,
 "silence_duration_ms":1200}`，然后以 BINARY frame 流 PCM16 24kHz mono。finalize 发
-`{"type":"commit"}`，收到 `transcript_completed` 后发 `{"type":"stop"}`。
+`{"type":"commit"}`。GPT Realtime 收到 `transcript_completed` 后发 `{"type":"stop"}`；
+GPT Live 等 `turn_completed` 后再发。
 
 控制消息：
 
@@ -275,6 +280,7 @@ Content-Type: application/json
 | `session_ready` | server → client | WS 已就绪 |
 | `transcript_delta` | server → client | 增量转写（`text` 或 `content`） |
 | `transcript_completed` | server → client | 一轮完整转写 |
+| `turn_completed` | server → client | GPT Live 一轮处理完成，可安全 stop |
 | `session_stopped` | server → client | 会话结束 |
 | `error` | server → client | 错误文案（`message` 或 `code`） |
 
@@ -306,6 +312,8 @@ MAX_RECOVER_ATTEMPTS = 5
 RECOVER_BACKOFF_BASE_MS = 300
 SILENCE_DURATION_MS = 1200
 FINALIZE_TIMEOUT_MS = 30000
+PCM_BYTES_PER_SECOND = 48000
+GPT Live timeout = max(60000, pcmBytes / PCM_BYTES_PER_SECOND * 1000 + 60000)
 SESSION_CREATE_PATH = "/v1/audio/realtime/sessions"
 COMMIT_MESSAGE = {"type":"commit"}
 STOP_MESSAGE = {"type":"stop"}
@@ -319,7 +327,7 @@ OkHttpClient pingInterval = HEARTBEAT_INTERVAL_SECONDS
 ## 测试
 
 JVM 单元测试在 `voiceflowkit/src/test/`（`testOptions.unitTests.isReturnDefaultValues
-= true`）。已交付 10 个测试文件：
+= true`）。测试文件包括：
 
 - `RealtimeApiUrlBuilderTest`（10）— normalize / 拼 url / ws-wss swap / ticket 保留。
 - `RealtimeMessageParserTest`（13）— 各 type → event 映射；start 控制消息。
@@ -330,12 +338,14 @@ JVM 单元测试在 `voiceflowkit/src/test/`（`testOptions.unitTests.isReturnDe
 - `BulkTranscriptionProgressTest`（6）— bulk accumulator 与 finished-vs-error 顺序修正。
 - `StreamCaptionStoreTest`（4）— 双层 caption 状态机 / transient 闪现。
 - `VoiceFlowClientStubTest`（11）— `makeStub` 行为。
-- `LiveBackendPromptFollowingTest`（1）— live 集成测试，见下。
+- `GptLiveTranscribeTest`：strategy/model/body、originating strategy、timeout 与事件顺序。
+- `RealtimeWebSocketSessionTest`：queue backpressure 与 audio/commit/turn/stop 顺序。
+- `LiveBackendPromptFollowingTest`（2）：GPT Realtime prompt 与 GPT Live fixture live gate。
 
 普通单元测试不依赖网络。`LiveBackendPromptFollowingTest` 是 opt-in 的 live 集成测试：
 把 checked-in 的 `voiceflowkit/src/test/resources/fixtures/tts_all_caps_24k.wav`（24kHz
-TTS 音频）经 `VoiceFlowClient.transcribe` 喂给真实 AI Builder backend，断言 prompt 确实
-到达模型。它消耗 API 额度，靠环境变量 `VOICEFLOW_LIVE_WS=1` + `.env` 里的 token 触发，
+TTS 音频）经 `VoiceFlowClient.transcribe` 喂给真实 AI Builder backend，覆盖 GPT Realtime
+prompt 与 GPT Live 非空结果。它消耗 API 额度，靠环境变量 `VOICEFLOW_LIVE_WS=1` + `.env` 里的 token 触发，
 默认不跑。封装脚本 `scripts/test_live_integration.sh` 设好 JBR、加载 `.env`、用
 `--rerun-tasks` 单独跑这个测试，对齐 iOS 的 `scripts/test_live_integration.sh`。
 

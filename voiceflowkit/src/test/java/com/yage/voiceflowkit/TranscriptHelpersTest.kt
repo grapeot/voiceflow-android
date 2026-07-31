@@ -12,7 +12,7 @@ import org.junit.Test
  * Verifies the stateless transcript helpers ([TranscriptDeltaReducer],
  * [RealtimeTranscriptionSupport]) and the stateful [FinalizeTranscriptAccumulator]
  * reproduce the Swift reduce/resolve semantics: append vs replace deltas, partial-vs-completed
- * resolution, the recoverable buffer-too-small predicate, and retry preservation.
+ * resolution and the recoverable buffer-too-small predicate.
  */
 class TranscriptHelpersTest {
 
@@ -59,23 +59,16 @@ class TranscriptHelpersTest {
     }
 
     @Test
-    fun `resolve prefers the longer trimmed text`() {
-        // Partial longer -> keep the (untrimmed) partial.
+    fun `resolve treats nonblank completed text as authoritative`() {
         assertEquals(
-            "a long partial transcript",
-            RealtimeTranscriptionSupport.resolveFinalizeTranscript("a long partial transcript", "short"),
-        )
-        // Completed longer -> use the trimmed completed.
-        assertEquals(
-            "a long completed transcript",
-            RealtimeTranscriptionSupport.resolveFinalizeTranscript("short", "  a long completed transcript  "),
+            "short",
+            RealtimeTranscriptionSupport.resolveFinalizeTranscript("a long partial transcript", "  short  "),
         )
     }
 
     @Test
-    fun `resolve keeps partial when equal length`() {
-        // length equal -> partial wins (>=).
-        assertEquals("abcde", RealtimeTranscriptionSupport.resolveFinalizeTranscript("abcde", "12345"))
+    fun `resolve trims authoritative completed text`() {
+        assertEquals("completed", RealtimeTranscriptionSupport.resolveFinalizeTranscript("partial", " completed "))
     }
 
     // --- FinalizeTranscriptAccumulator ---
@@ -89,21 +82,19 @@ class TranscriptHelpersTest {
     }
 
     @Test
-    fun `accumulator prefers the longer of partial and completed`() {
+    fun `accumulator prefers authoritative completed text`() {
         val acc = FinalizeTranscriptAccumulator()
-        acc.appendDelta("hi")
-        acc.setCompleted("a much longer completed transcript")
-        assertEquals("a much longer completed transcript", acc.resolvedText)
+        acc.appendDelta("a much longer partial transcript")
+        acc.setCompleted("done")
+        assertEquals("done", acc.resolvedText)
     }
 
     @Test
-    fun `accumulator preserves and restores across a retry`() {
+    fun `accumulator reset clears all state before retry`() {
         val acc = FinalizeTranscriptAccumulator()
         acc.appendDelta("preserved text")
-        val snapshot = acc.preserveForRetry()
+        acc.setCompleted("completed")
         acc.reset()
         assertEquals("", acc.resolvedText)
-        acc.restoreAfterRetry(snapshot)
-        assertEquals("preserved text", acc.resolvedText)
     }
 }

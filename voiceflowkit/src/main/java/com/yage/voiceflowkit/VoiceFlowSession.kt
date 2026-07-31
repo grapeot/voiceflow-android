@@ -19,6 +19,8 @@ import java.util.UUID
 class VoiceFlowPreservedAudio internal constructor(
     val id: String = UUID.randomUUID().toString(),
     val byteCount: Int,
+    val strategy: VoiceFlowRecordingStrategy,
+    internal val model: String,
     internal val file: File,
 )
 
@@ -38,6 +40,7 @@ class VoiceFlowPreservedAudio internal constructor(
 class VoiceFlowSession internal constructor(
     private val underlying: RealtimeLiveTranscriptionSession,
     private val eventBridge: SessionEventBridge,
+    val strategy: VoiceFlowRecordingStrategy,
 ) {
     /**
      * Reactive event stream. Equivalent to the callback API; both can be

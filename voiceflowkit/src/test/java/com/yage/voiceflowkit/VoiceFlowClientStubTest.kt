@@ -64,18 +64,14 @@ class VoiceFlowClientStubTest {
     }
 
     @Test
-    fun `stub session emits the bridged event sequence on its events flow`() = runTest {
+    fun `stub session emits phase but not raw transcript events on its events flow`() = runTest {
         val client = VoiceFlowClient.makeStub(liveTranscript = "streamed text")
         val session = client.startSession()
 
         session.events.test {
-            // finalize emits TextDelta(isNewResponse=true) -> PartialTranscript,
-            // then Status(Idle) -> PhaseChanged(Disconnected).
+            // Transcript snapshots use the finalize callback exclusively. Only
+            // Status(Idle) is bridged to the public event flow.
             session.commitAndStop()
-
-            val partial = awaitItem()
-            assertTrue(partial is VoiceFlowEvent.PartialTranscript)
-            assertEquals("streamed text", (partial as VoiceFlowEvent.PartialTranscript).text)
 
             val phase = awaitItem()
             assertTrue(phase is VoiceFlowEvent.PhaseChanged)

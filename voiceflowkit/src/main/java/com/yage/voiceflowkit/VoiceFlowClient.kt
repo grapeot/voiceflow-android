@@ -17,8 +17,9 @@ import java.util.UUID
  * Public entry point for VoiceFlowKit. Holds the config (endpoint, token
  * provider, optional prompt/terms) and creates sessions.
  *
- * Supports two complete recording strategies:
+ * Supports three complete recording strategies:
  * - [VoiceFlowRecordingStrategy.OPENAI_REALTIME]: live WebSocket path
+ * - [VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE]: GPT Live WebSocket path
  * - [VoiceFlowRecordingStrategy.GROK_BATCH]: file upload after Stop
  */
 class VoiceFlowClient internal constructor(
@@ -43,19 +44,33 @@ class VoiceFlowClient internal constructor(
 
     suspend fun currentConfig(): VoiceFlowConfig = configMutex.withLock { config }
 
-    suspend fun startSession(): VoiceFlowSession {
+    suspend fun startSession(): VoiceFlowSession =
+        startSessionInternal(VoiceFlowRecordingStrategy.OPENAI_REALTIME)
+
+    suspend fun startSession(strategy: VoiceFlowRecordingStrategy): VoiceFlowSession {
+        if (!strategy.usesRealtimeTransport) throw VoiceFlowError.UnsupportedStrategy(strategy)
+        return startSessionInternal(strategy)
+    }
+
+    private suspend fun startSessionInternal(strategy: VoiceFlowRecordingStrategy): VoiceFlowSession {
         val snapshot = configMutex.withLock { config }
         val token = currentToken(snapshot)
         val bridge = SessionEventBridge()
+        val model = strategy.realtimeModel(snapshot.model)
         try {
             val live = transcriber.beginLiveSession(
                 baseURL = snapshot.endpoint,
                 token = token,
-                model = snapshot.model,
+                model = model,
+                strategy = strategy,
                 context = RealtimeSessionContext(prompt = snapshot.prompt, terms = snapshot.terms),
                 onEvent = { event -> bridge.emit(event) },
             )
-            return VoiceFlowSession(underlying = live, eventBridge = bridge)
+            return VoiceFlowSession(
+                underlying = live,
+                eventBridge = bridge,
+                strategy = strategy,
+            )
         } catch (realtime: RealtimeTranscriptionError) {
             bridge.finish()
             throw VoiceFlowError.from(realtime)
@@ -107,7 +122,9 @@ class VoiceFlowClient internal constructor(
                     throw VoiceFlowError.Underlying(t.toString())
                 }
             }
-            VoiceFlowRecordingStrategy.OPENAI_REALTIME -> {
+            VoiceFlowRecordingStrategy.OPENAI_REALTIME,
+            VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE,
+            -> {
                 val pcm: ByteArray = try {
                     Pcm16WavWriter.readPcm(audioFile)
                 } catch (_: Throwable) {
@@ -118,7 +135,8 @@ class VoiceFlowClient internal constructor(
                         pcm = pcm,
                         baseURL = snapshot.endpoint,
                         token = token,
-                        model = snapshot.model,
+                        model = strategy.realtimeModel(snapshot.model),
+                        strategy = strategy,
                         context = RealtimeSessionContext(prompt = snapshot.prompt, terms = snapshot.terms),
                         onPartialTranscript = onPartialTranscript,
                     )
@@ -142,12 +160,15 @@ class VoiceFlowClient internal constructor(
             throw VoiceFlowError.AudioConversionFailed
         }
         if (pcm.isEmpty()) throw VoiceFlowError.EmptyTranscript
+        val strategy = preservedAudio.strategy
+        if (!strategy.usesRealtimeTransport) throw VoiceFlowError.UnsupportedStrategy(strategy)
         try {
             val text = transcriber.transcribeBulkPcm(
                 pcm = pcm,
                 baseURL = snapshot.endpoint,
                 token = token,
-                model = snapshot.model,
+                model = preservedAudio.model,
+                strategy = strategy,
                 context = RealtimeSessionContext(prompt = snapshot.prompt, terms = snapshot.terms),
                 onPartialTranscript = onPartialTranscript,
             )
