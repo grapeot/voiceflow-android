@@ -268,28 +268,6 @@ fun SettingsScreen(
                         },
                     )
                 }
-                if (state.recordingStrategy == VoiceFlowRecordingStrategy.OPENAI_REALTIME) {
-                    FieldLabel(stringRes(R.string.settings_transcription_prompt))
-                    OutlinedTextField(
-                        value = state.prompt,
-                        onValueChange = viewModel::updatePrompt,
-                        placeholder = { Text(stringRes(R.string.settings_transcription_prompt_placeholder)) },
-                        minLines = 2,
-                        maxLines = 4,
-                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                FieldLabel(stringRes(R.string.settings_transcription_terms))
-                OutlinedTextField(
-                    value = state.terms,
-                    onValueChange = viewModel::updateTerms,
-                    placeholder = { Text(stringRes(R.string.settings_transcription_terms_placeholder)) },
-                    minLines = 2,
-                    maxLines = 4,
-                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None),
-                    modifier = Modifier.fillMaxWidth(),
-                )
             }
         }
 
