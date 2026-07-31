@@ -3,6 +3,7 @@ package com.yage.voiceflow.ui.settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
@@ -189,12 +191,35 @@ fun SettingsScreen(
                     style = DesignTokens.Typography.captionSub,
                     color = DesignTokens.Palette.textTertiary,
                 )
-                FieldLabel(stringRes(R.string.settings_transcription_strategy))
+                var showStrategyHelp by rememberSaveable { mutableStateOf(false) }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringRes(R.string.settings_transcription_model),
+                        style = DesignTokens.Typography.bodyBold,
+                        color = DesignTokens.Palette.textPrimary,
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(20.dp)
+                            .clickable { showStrategyHelp = true },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Default.Info,
+                            contentDescription = stringRes(R.string.settings_transcription_strategy_dialog_title),
+                            tint = DesignTokens.Palette.accent,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
                 val strategies = listOf(
                     VoiceFlowRecordingStrategy.OPENAI_REALTIME to R.string.settings_transcription_strategy_openai,
                     VoiceFlowRecordingStrategy.GROK_BATCH to R.string.settings_transcription_strategy_grok,
                 )
-                var showStrategyHelp by rememberSaveable { mutableStateOf(false) }
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                     strategies.forEachIndexed { index, (strategy, labelRes) ->
                         SegmentedButton(
@@ -213,19 +238,26 @@ fun SettingsScreen(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(
-                        Icons.Default.Info,
-                        contentDescription = stringRes(R.string.settings_transcription_strategy_dialog_title),
-                        tint = DesignTokens.Palette.textTertiary,
+                    Box(
                         modifier = Modifier
-                            .size(18.dp)
+                            .size(22.dp)
+                            .background(DesignTokens.Palette.accent, CircleShape)
                             .clickable { showStrategyHelp = true },
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Default.Info,
+                            contentDescription = stringRes(R.string.settings_transcription_strategy_dialog_title),
+                            tint = Color.White,
+                            modifier = Modifier.size(14.dp),
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         stringRes(R.string.settings_transcription_strategy_help),
                         style = DesignTokens.Typography.captionSub,
-                        color = DesignTokens.Palette.textTertiary,
+                        color = DesignTokens.Palette.accent,
+                        modifier = Modifier.clickable { showStrategyHelp = true },
                     )
                 }
                 if (showStrategyHelp) {
@@ -243,13 +275,6 @@ fun SettingsScreen(
                                 Text(stringRes(R.string.ok))
                             }
                         },
-                    )
-                }
-                if (state.recordingStrategy == VoiceFlowRecordingStrategy.GROK_BATCH) {
-                    Text(
-                        stringRes(R.string.settings_transcription_strategy_grok_hint),
-                        style = DesignTokens.Typography.captionSub,
-                        color = DesignTokens.Palette.textTertiary,
                     )
                 }
                 if (state.recordingStrategy == VoiceFlowRecordingStrategy.OPENAI_REALTIME) {
