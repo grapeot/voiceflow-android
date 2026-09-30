@@ -6,6 +6,7 @@
 
 - 新增 `docs/test.md`：对齐 iOS 仓库的测试策略与验收命令——默认 JVM 单测（`testDebugUnitTest`，无网络、无设备）、opt-in live backend 集成（`scripts/test_live_integration.sh`，消耗 API 额度）、opt-in OpenCode live e2e（真机/模拟器 + 本地 OpenCode，`.env` 缺失自动 skip）。
 - `AGENTS.md` 目录结构补上 `docs/design.md` 与 `docs/test.md`（design spec 此前只在 working.md 里被引用，test.md 此前缺失）。
+- 修正 `AGENTS.md` 的默认分支名：`main` → `master`（以远端 `origin/HEAD` 与 GitHub 默认分支为准，`gh pr create --base main` 实际报错）。
 - 纯文档变更，无代码改动。
 
 ### 2026-07-31 (VoiceFlowKit 0.4.0 release prep)
