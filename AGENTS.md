@@ -24,7 +24,8 @@ voiceflowkit/                                               # library 模块（a
   src/main/java/com/yage/voiceflowkit/                      # 公开 facade
   src/main/java/com/yage/voiceflowkit/internal/             # internal pipeline（不进 ABI）
   src/test/java/com/yage/voiceflowkit/                      # JVM 单元测试
-docs/prd.md / docs/rfc.md / docs/working.md                 # 产品 / 技术方案 / 变更记录
+docs/prd.md / docs/rfc.md / docs/test.md / docs/working.md  # 产品 / 技术方案 / 测试策略 / 变更记录
+docs/design.md                                              # 视觉设计语言 spec（与 iOS 仓库同名 spec 对齐）
 app/                                                        # 参考 app（Compose，applicationId com.yage.voiceflow，见 working.md）
 ```
 
