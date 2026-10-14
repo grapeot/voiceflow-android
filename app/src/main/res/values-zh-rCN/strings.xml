@@ -123,4 +123,13 @@
     <string name="record_clear_cleared">已清空文本</string>
     <string name="record_clear_empty">没有可清空的文本</string>
     <string name="record_clipboard_emptyCopied">已复制空文本到剪贴板</string>
+    <string name="record_transcriptMode_title">转写模式</string>
+    <string name="record_transcriptMode_replace">替换</string>
+    <string name="record_transcriptMode_append">追加</string>
+    <string name="record_transcriptMode_switchReplace">切换到替换</string>
+    <string name="record_transcriptMode_switchAppend">切换到追加</string>
+    <string name="record_transcriptMode_replaceSelected">已切换为：替换</string>
+    <string name="record_transcriptMode_appendSelected">已切换为：追加</string>
+    <string name="record_undo">撤销</string>
+    <string name="record_redo">重做</string>
 </resources>

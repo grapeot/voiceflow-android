@@ -47,6 +47,12 @@ export PATH="$JAVA_HOME/bin:$PATH"
 - `StrategySettingsTest` — strategy 选择与持久化；ordered audio sender 非阻塞（capture 回调不等网络 backpressure）、overflow 拒绝、1s drain timeout 取消卡死的网络发送
 - `ToolbarFeedbackTest` — 两秒到期、连续相同提示重新计时、活跃状态优先
 - `ToolbarViewModelTest` — 真实 VM 的清空/历史恢复、空清空 no-op、空复制实际调用 Android 剪贴板、复制失败与忙碌门控；挂起的合成发送覆盖 Sending→clear→restore/前后导航、菜单与重复发送门控；显式复制成功/失败/空文本到期及离页后的最终状态选择，自动复制持久状态保持。全部依赖使用合成 mock，不外发
+- `TranscriptCompositionTest` — Replace/Append 基底、Unicode/换行、累计 snapshot、尾段重发、失败回滚、用户编辑与未持久化音频的边界失效
+- `TranscriptModeViewModelTest` — 模式会话默认值/两秒反馈、Start 权限期间锁定、三策略整篇历史与剪贴板、逐帧 finalize、bulk fallback、重发/后台/无信号/失败恢复、旧 session 事件及晚到响应不能改新内容。麦克风、服务和响应均为合成 mock
+
+模式回归还使用 Deferred 控制后台 microphone.stop、audio drain、session.cancel 的返回时机，验证旧清理不能覆盖新的 Append 救援。Replace 覆盖 partial 后异常/空白和连续救援，验证原文、历史、剪贴板及后续切换 Append 的尾段边界。
+
+麦克风 mock 遵循真实的一次性 stop 契约：开始录音后第一次 stop 返回 WAV，重复 stop 返回 null。专门测试第一次 stop 挂起时前台重复操作被门控、无旧 WAV 的首次录音正确登记、旧 WAV 不被误用、WAV 登记后网络仍挂起时恢复救援，以及正常/后台/救援三条停止路径的异常和空结果释放门控。
 
 ## Live backend 集成测试（opt-in）
 
@@ -82,17 +88,20 @@ cp .env.example .env   # 填入 AI_BUILDER_TOKEN
 - 历史 chevron、⋯ 菜单的保存/重发
 - 中英文双语切换
 - 模拟器截图逐项确认视觉元素（Pixelate：状态字、像素方块波形、Tab 图标、app icon），与 iOS 一致
-- 本批工具条只显示清空/复制，在空页/非空/忙碌态常驻；中英、深浅色、窄屏和大字体下不挤掉图标
+- 工具条模式/清空/复制在空页/非空/忙碌态常驻；中英、深浅色、窄屏和大字体下不挤掉图标
 - 空复制覆盖旧剪贴板；空清空连续点击不改变历史；清空后左箭头恢复刚归档文本
 - 连点复制/清空，状态区两秒反馈不移动按钮；录音、转写和发送优先
+- 连点模式后确认 Replace 灰色 swap、Append accent 文字追加；历史按钮随模式切换为 Undo/Redo
+- Append 两次录音形成整篇文档；重发只改最后录音，失败重发恢复原文；编辑/历史/清空后重发安全追加
+- 录音/转写中不能改变模式，有非空文档基底时不能编辑，失败/后台结束后恢复可用；现有 Save/Resend 救援入口保持可用
 
 工具条改动的离线验证：
 
 ```sh
 unset VOICEFLOW_LIVE_WS
-./gradlew :voiceflowkit:testDebugUnitTest :app:testDebugUnitTest -PvoiceflowLiveTestCredentials=false
-./gradlew :voiceflowkit:assembleDebug :app:assembleDebug -PvoiceflowLiveTestCredentials=false
-./gradlew :app:lintDebug -PvoiceflowLiveTestCredentials=false
+./gradlew --offline :voiceflowkit:testDebugUnitTest :app:testDebugUnitTest -PvoiceflowLiveTestCredentials=false
+./gradlew --offline :voiceflowkit:assembleDebug :app:assembleDebug -PvoiceflowLiveTestCredentials=false
+./gradlew --offline :app:lintDebug -PvoiceflowLiveTestCredentials=false
 ```
 
 不要用全量 connected tests 代替离线验证。需要设备 UI 自动化时只定向执行合成用例，真实 API 与 OpenCode 外发测试需另行授权。

@@ -20,6 +20,8 @@ import com.yage.voiceflow.model.StreamCaptionKey
 import com.yage.voiceflow.model.SignalTier
 import com.yage.voiceflow.model.SignalQualityConfig
 import com.yage.voiceflow.model.TranscriptHistory
+import com.yage.voiceflow.model.TranscriptComposition
+import com.yage.voiceflow.model.TranscriptMode
 import com.yage.voiceflow.service.OpenCodeClient
 import com.yage.voiceflow.service.OpenCodeClientError
 import com.yage.voiceflowkit.VoiceFlowAudioMetering
@@ -167,6 +169,11 @@ data class UiState(
     val transcript: String = "",
     val transcriptHistory: TranscriptHistory = TranscriptHistory(),
     val toolbarFeedbackKey: String? = null,
+    val transcriptMode: TranscriptMode = TranscriptMode.Replace,
+    val chunkInFlight: Boolean = false,
+    val chunkLocked: Boolean = false,
+    /** Local stop/WAV registration only; never held while waiting for the network. */
+    val localStopInProgress: Boolean = false,
 
     // --- Two-layer stream captions ---
     val persistentStreamCaptionKey: String? = null,
@@ -225,16 +232,18 @@ data class UiState(
         get() = transcript.trim().isNotEmpty()
 
     val canStartRecording: Boolean
-        get() = recordingStatus == RecordingStatus.Idle || recordingStatus == RecordingStatus.Ready
+        get() = !localStopInProgress && !chunkInFlight &&
+            (recordingStatus == RecordingStatus.Idle || recordingStatus == RecordingStatus.Ready)
 
     val canStopRecording: Boolean
-        get() = recordingStatus == RecordingStatus.Recording
+        get() = !localStopInProgress && recordingStatus == RecordingStatus.Recording
 
     /** Navigation (and save/resend) are only allowed while not mid-capture. */
     val canNavigateTranscriptHistory: Boolean
-        get() = recordingStatus == RecordingStatus.Idle || recordingStatus == RecordingStatus.Ready
+        get() = canStartRecording
 
     val canClearTranscript: Boolean get() = canNavigateTranscriptHistory
+    val canChangeTranscriptMode: Boolean get() = canNavigateTranscriptHistory
 
     val canNavigatePreviousTranscript: Boolean
         get() = canNavigateTranscriptHistory &&
@@ -276,7 +285,8 @@ data class UiState(
      * [RecordingStatus.Transcribing].
      */
     val canResendRecording: Boolean
-        get() = hasToken && (recordingStatus == RecordingStatus.Recording || hasRecordingFile)
+        get() = !localStopInProgress && hasToken &&
+            (recordingStatus == RecordingStatus.Recording || hasRecordingFile)
 
     /** Flat filename for the save-confirmation dialog (avoids dotted access). */
     val lastSavedRecordingFileName: String?
@@ -311,6 +321,7 @@ class MainViewModel internal constructor(
     private val microphone: VoiceFlowMicrophone = VoiceFlowMicrophone(application),
     private val openCodeClient: OpenCodeClient = OpenCodeClient(),
 ) : AndroidViewModel(application) {
+    private val composition = TranscriptComposition()
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -330,6 +341,7 @@ class MainViewModel internal constructor(
     // --- Live session machinery (ports the AppState stored vars) ---
 
     private var session: VoiceFlowSession? = null
+    private var liveSessionGeneration = 0L
     private var eventJob: Job? = null
     private var heartbeatJob: Job? = null
     private var levelJob: Job? = null
@@ -526,6 +538,13 @@ class MainViewModel internal constructor(
 
     fun clearToolbarFeedback() = toolbarFeedback.clear()
 
+    fun toggleTranscriptMode() {
+        if (!_state.value.canChangeTranscriptMode) return
+        val mode = if (_state.value.transcriptMode == TranscriptMode.Replace) TranscriptMode.Append else TranscriptMode.Replace
+        _state.update { it.copy(transcriptMode = mode) }
+        toolbarFeedback.show(if (mode == TranscriptMode.Append) "record.transcriptMode.appendSelected" else "record.transcriptMode.replaceSelected")
+    }
+
     // endregion
 
     // region OpenCode settings (port of AppState+OpenCode.swift)
@@ -687,8 +706,13 @@ class MainViewModel internal constructor(
 
     fun startRecording() {
         if (!_state.value.canStartRecording) return
+        val mode = _state.value.transcriptMode
+        val attempt = transcriptionAttemptGate.next()
+        transcriptionJob?.cancel()
+        // Lock the mode immediately, including the permission/start-up interval.
+        _state.update { it.copy(recordingStatus = RecordingStatus.RequestingPermission) }
         toolbarFeedback.clear()
-        viewModelScope.launch { startRecordingInternal() }
+        transcriptionJob = viewModelScope.launch { startRecordingInternal(mode, attempt) }
     }
 
     fun handleAppStarted() {
@@ -697,38 +721,82 @@ class MainViewModel internal constructor(
 
     fun handleAppStopped() {
         isAppStopped = true
+        // The existing owner must finish the one-shot recorder.stop() and hand
+        // off its WAV. It will resume background cleanup once registered.
+        if (_state.value.localStopInProgress) return
+        val attempt = transcriptionAttemptGate.next()
+        val stoppedJob = transcriptionJob
+        transcriptionJob = null
+        stoppedJob?.cancel()
+        stopFinalizeTypewriter()
+        val wasRecording = _state.value.recordingStatus == RecordingStatus.Recording
+        // Detach only this stop's resources before any suspension. A foreground
+        // rescue may start while the old session is still closing.
+        val stoppedSession = session
+        session = null
+        ++liveSessionGeneration
+        val stoppedSender = audioSender
+        audioSender = null
+        eventJob?.cancel()
+        eventJob = null
+        stopStreamHeartbeat()
+        if (wasRecording) {
+            _state.update { it.copy(recordingStatus = RecordingStatus.Transcribing, localStopInProgress = true) }
+            stopRecordingTimer()
+            signalBannerGraceJob?.cancel()
+            signalBannerGraceJob = null
+        }
         viewModelScope.launch {
-            val wasRecording = _state.value.recordingStatus == RecordingStatus.Recording
-            if (wasRecording) {
-                stopRecordingTimer()
-                val wav = runCatching { microphone.stop() }.getOrNull()
-                if (wav != null && wav.exists() && wav.length() > 0L) {
-                    lastRecordingFile = wav
-                    lastRecordingStrategy = activeRecordingStrategy
-                    _state.update {
-                        it.copy(
-                            hasRecordingFile = true,
-                            recordingStatus = RecordingStatus.Ready,
-                        )
+            try {
+                if (!transcriptionAttemptGate.isCurrent(attempt)) return@launch
+                if (wasRecording) {
+                    val wav = runCatching { microphone.stop() }.getOrNull()
+                    if (!transcriptionAttemptGate.isCurrent(attempt)) return@launch
+                    if (wav != null && wav.exists() && wav.length() > 0L) {
+                        lastRecordingFile = wav
+                        lastRecordingStrategy = activeRecordingStrategy
+                        composition.audioPersisted()
+                        _state.update {
+                            it.copy(hasRecordingFile = true, recordingStatus = RecordingStatus.Ready,
+                                localStopInProgress = false)
+                        }
+                    } else {
+                        wav?.let { runCatching { it.delete() } }
+                        _state.update { it.copy(recordingStatus = RecordingStatus.Idle, localStopInProgress = false) }
                     }
-                } else {
-                    wav?.let { runCatching { it.delete() } }
-                    _state.update { it.copy(recordingStatus = RecordingStatus.Idle) }
+                    val delivered = stoppedSender?.drain() ?: true
+                    if (!transcriptionAttemptGate.isCurrent(attempt)) return@launch
+                    if (!delivered && stoppedSession != null) {
+                        val preserved = runCatching { stoppedSession.abortPreservingAudio() }.getOrNull()
+                        if (!transcriptionAttemptGate.isCurrent(attempt)) {
+                            preserved?.let(voiceFlowClient::discardPreservedAudio)
+                            return@launch
+                        }
+                        preservedLiveAudio = preserved
+                    }
                 }
-                val activeSession = session
-                if (!drainAudioSender() && activeSession != null) {
-                    liveAudioDeliveryFailed.set(true)
-                    preserveLiveSessionAfterDeliveryFailure(activeSession)
+            } finally {
+                if (wasRecording && transcriptionAttemptGate.isCurrent(attempt)) {
+                    _state.update { it.copy(localStopInProgress = false) }
                 }
+                // Cleanup of captured resources remains safe after ownership expires.
+                stoppedSender?.cancel()
+                stoppedSession?.let { runCatching { it.cancel() } }
             }
-            transcriptionJob?.cancel()
-            transcriptionJob = null
-            transcriptionAttemptGate.invalidate()
-            cancelLiveTranscriptionSession()
+            if (!transcriptionAttemptGate.isCurrent(attempt)) return@launch
+            transientCaptionJob?.cancel()
+            transientCaptionJob = null
+            _state.update {
+                it.copy(streamConnectionPhase = VoiceFlowConnectionPhase.Disconnected,
+                    persistentStreamCaptionKey = null, transientStreamCaptionKey = null, audioLevel = 0f)
+            }
+            settleTranscript()
+            _state.update { it.copy(recordingStatus = if (it.hasRecordingFile) RecordingStatus.Ready else RecordingStatus.Idle) }
+            isTranscriptionTeardown = false
         }
     }
 
-    private suspend fun startRecordingInternal() {
+    private suspend fun startRecordingInternal(mode: TranscriptMode, attempt: Long) {
         // Token gate (mirrors the two iOS guards: hasToken + non-empty token).
         if (!settings.hasToken() || settings.getToken().isEmpty()) {
             presentRecordError("record.error.missingToken")
@@ -742,6 +810,7 @@ class MainViewModel internal constructor(
         // If no requester is wired, fall back to the kit's current-grant check so
         // a missing grant still surfaces as a readable error.
         val granted = micPermissionRequester?.invoke() ?: microphone.hasPermission()
+        if (!transcriptionAttemptGate.isCurrent(attempt) || isAppStopped) return
         if (!granted || !microphone.hasPermission()) {
             presentRecordError("record.error.microphoneDenied")
             return
@@ -751,14 +820,18 @@ class MainViewModel internal constructor(
             discardPreservedLiveAudio()
             liveAudioDeliveryFailed.set(false)
             // Reset per-session state (mirrors the iOS do-block setup).
+            val initialText = composition.begin(_state.value.transcript, mode)
             _state.update {
                 it.copy(
-                    transcript = "",
+                    transcript = initialText,
+                    chunkInFlight = true,
+                    chunkLocked = composition.locksEditor,
                     lastClipboardStatusKey = null,
                     lastSavedRecording = null,
                     shouldPresentSavedRecordingAlert = false,
                     hasRecordingFile = false,
-                    openCodeSendStatus = OpenCodeSendStatus.Idle,
+                    openCodeSendStatus = if (it.openCodeSendStatus == OpenCodeSendStatus.Sending)
+                        it.openCodeSendStatus else OpenCodeSendStatus.Idle,
                     streamConnectionPhase = VoiceFlowConnectionPhase.Connecting,
                     persistentStreamCaptionKey = null,
                     transientStreamCaptionKey = null,
@@ -767,8 +840,10 @@ class MainViewModel internal constructor(
             transientCaptionJob?.cancel()
             transientCaptionJob = null
             userEditedTranscriptDuringStream = false
+            isTranscriptionTeardown = false
 
             voiceFlowClient.updateConfig(settings.buildConfig())
+            if (!transcriptionAttemptGate.isCurrent(attempt)) return
             activeRecordingStrategy = settings.recordingStrategy
             val strategy = activeRecordingStrategy
 
@@ -781,6 +856,10 @@ class MainViewModel internal constructor(
             val liveSession: VoiceFlowSession? =
                 if (strategy.usesRealtimeTransport) {
                     val newSession = voiceFlowClient.startSession(strategy)
+                    if (!transcriptionAttemptGate.isCurrent(attempt)) {
+                        newSession.cancel()
+                        return
+                    }
                     session = newSession
                     // Start the event consumer immediately so the earliest PhaseChanged
                     // is caught before mic.start (the SharedFlow has replay=0).
@@ -814,6 +893,7 @@ class MainViewModel internal constructor(
                 }
             }
 
+            if (!transcriptionAttemptGate.isCurrent(attempt)) return
             resetRecordingTimer()
             startRecordingTimer()
             _state.update {
@@ -831,19 +911,23 @@ class MainViewModel internal constructor(
                 )
             }
             startSignalBannerGraceTimer()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (t: Throwable) {
+            if (!transcriptionAttemptGate.isCurrent(attempt)) return
             cancelLiveTranscriptionSession()
+            if (!transcriptionAttemptGate.isCurrent(attempt)) return
             resetRecordingTimer()
             presentRecordError("record.error.recordingFailed")
         }
     }
 
     fun stopRecording() {
-        if (_state.value.recordingStatus != RecordingStatus.Recording) return
+        if (!_state.value.canStopRecording) return
         stopRecordingTimer()
         signalBannerGraceJob?.cancel()
         signalBannerGraceJob = null
-        _state.update { it.copy(recordingStatus = RecordingStatus.Transcribing) }
+        _state.update { it.copy(recordingStatus = RecordingStatus.Transcribing, localStopInProgress = true) }
         transcriptionJob?.cancel()
         val attempt = transcriptionAttemptGate.next()
         transcriptionJob = viewModelScope.launch {
@@ -851,15 +935,19 @@ class MainViewModel internal constructor(
             try {
                 wav = microphone.stop()
             } catch (t: Throwable) {
+                if (!transcriptionAttemptGate.isCurrent(attempt)) return@launch
+                _state.update { it.copy(localStopInProgress = false) }
                 cancelLiveTranscriptionSession()
                 if (transcriptionAttemptGate.isCurrent(attempt)) {
                     presentRecordError("record.error.transcriptionFailed")
                 }
                 return@launch
             }
+            if (!transcriptionAttemptGate.isCurrent(attempt)) return@launch
 
             // Empty / missing capture: treat exactly like the iOS byteCount==0 path.
             if (wav == null || !wav.exists() || wav.length() == 0L) {
+                _state.update { it.copy(localStopInProgress = false) }
                 wav?.let { runCatching { it.delete() } }
                 cancelLiveTranscriptionSession()
                 if (transcriptionAttemptGate.isCurrent(attempt)) {
@@ -868,16 +956,16 @@ class MainViewModel internal constructor(
                 return@launch
             }
 
-            val audioDelivered = drainAudioSender()
-
             // Signal quality gate: evaluate before committing.
             val tier = evaluateSignalTier()
             _state.update { it.copy(signalTier = tier) }
 
             if (tier == SignalTier.Tier1NoSignal) {
+                _state.update { it.copy(localStopInProgress = false) }
                 // Don't commit — OpenAI would hallucinate on empty audio.
                 wav.let { runCatching { it.delete() } }
                 cancelLiveTranscriptionSession()
+                if (!transcriptionAttemptGate.isCurrent(attempt)) return@launch
                 resetRecordingTimer()
                 _state.update { it.copy(audioLevel = 0f) }
                 presentRecordError("record.signal.noSignal")
@@ -886,7 +974,14 @@ class MainViewModel internal constructor(
 
             lastRecordingFile = wav
             lastRecordingStrategy = activeRecordingStrategy
-            _state.update { it.copy(hasRecordingFile = true) }
+            composition.audioPersisted()
+            _state.update { it.copy(hasRecordingFile = true, localStopInProgress = false) }
+            if (isAppStopped) {
+                handleAppStopped()
+                return@launch
+            }
+            val audioDelivered = drainAudioSender()
+            if (!transcriptionAttemptGate.isCurrent(attempt)) return@launch
             if (activeRecordingStrategy.usesRealtimeTransport &&
                 (!audioDelivered || liveAudioDeliveryFailed.get())
             ) {
@@ -919,7 +1014,7 @@ class MainViewModel internal constructor(
                 completeStopTranscriptionFailure(attempt)
             }
         } finally {
-            isTranscriptionTeardown = false
+            if (transcriptionAttemptGate.isCurrent(attempt)) isTranscriptionTeardown = false
         }
     }
 
@@ -933,7 +1028,7 @@ class MainViewModel internal constructor(
         isTranscriptionTeardown = true
         // Start a fresh per-delta typewriter pipeline before any finalize callbacks
         // arrive (recording-time deltas are still suppressed by handleStreamEvent).
-        startFinalizeTypewriter()
+        val channel = startFinalizeTypewriter(attempt)
         try {
             val activeSession = session
             if (activeSession == null) {
@@ -945,7 +1040,7 @@ class MainViewModel internal constructor(
             try {
                 streamText = activeSession.commitAndStop { partial ->
                     if (transcriptionAttemptGate.isCurrent(attempt)) {
-                        updateTranscriptDuringFinalize(partial)
+                        channel.trySend(partial)
                     }
                 }
             } catch (cancelled: CancellationException) {
@@ -956,11 +1051,14 @@ class MainViewModel internal constructor(
 
             if (!transcriptionAttemptGate.isCurrent(attempt)) return
             cancelLiveTranscriptionSession()
+            if (!transcriptionAttemptGate.isCurrent(attempt)) return
+            // No old finalize frame may race the subsequent bulk fallback.
+            drainFinalizeTypewriter()
+            if (!transcriptionAttemptGate.isCurrent(attempt)) return
 
             if (isUsableTranscript(streamText)) {
                 // Let the typewriter drain every queued delta before the final
                 // write, so the animation is never truncated by the overwrite.
-                drainFinalizeTypewriter()
                 completeStopTranscriptionSuccess(streamText, attempt)
                 return
             }
@@ -988,14 +1086,13 @@ class MainViewModel internal constructor(
             )
             if (!transcriptionAttemptGate.isCurrent(attempt)) return
             if (bulk != null && isUsableTranscript(bulk)) {
-                drainFinalizeTypewriter()
                 completeStopTranscriptionSuccess(bulk, attempt)
                 return
             }
 
             completeStopTranscriptionFailure(attempt)
         } finally {
-            isTranscriptionTeardown = false
+            if (transcriptionAttemptGate.isCurrent(attempt)) isTranscriptionTeardown = false
         }
     }
 
@@ -1024,8 +1121,10 @@ class MainViewModel internal constructor(
                 audioFile = file,
                 strategy = strategy,
             ) { partial ->
-                if (strategy.usesRealtimeTransport && transcriptionAttemptGate.isCurrent(attempt)) {
-                    _state.update { it.copy(transcript = partial) }
+                if (strategy.usesRealtimeTransport) {
+                    viewModelScope.launch {
+                        if (transcriptionAttemptGate.isCurrent(attempt)) applyChunk(partial)
+                    }
                 }
             }
             result.text
@@ -1045,14 +1144,18 @@ class MainViewModel internal constructor(
         if (!transcriptionAttemptGate.isCurrent(attempt)) return
         stopFinalizeTypewriter()
         _recordErrorKey.value = null
+        val committed = composition.finish(text)
         _state.update {
             it.copy(
-                transcript = text,
-                openCodeSendStatus = OpenCodeSendStatus.Idle,
+                transcript = committed,
+                chunkInFlight = false,
+                chunkLocked = false,
+                openCodeSendStatus = if (it.openCodeSendStatus == OpenCodeSendStatus.Sending)
+                    it.openCodeSendStatus else OpenCodeSendStatus.Idle,
                 streamConnectionPhase = VoiceFlowConnectionPhase.Disconnected,
                 persistentStreamCaptionKey = null,
                 transientStreamCaptionKey = null,
-                transcriptHistory = it.transcriptHistory.add(text),
+                transcriptHistory = it.transcriptHistory.add(committed),
                 recordingStatus = RecordingStatus.Ready,
             )
         }
@@ -1068,7 +1171,9 @@ class MainViewModel internal constructor(
         if (!transcriptionAttemptGate.isCurrent(attempt)) return
         stopFinalizeTypewriter()
         val current = _state.value.transcript
-        if (allowPartialSalvage && isUsableTranscript(current)) {
+        val visibleChunk = if (composition.inFlight) composition.visibleChunk(current) else current
+        if (allowPartialSalvage && isUsableTranscript(visibleChunk)) {
+            settleTranscript()
             _state.update {
                 it.copy(
                     transcriptHistory = it.transcriptHistory.add(current),
@@ -1084,6 +1189,7 @@ class MainViewModel internal constructor(
 
     fun resendLastRecording() {
         val snapshot = _state.value
+        if (!snapshot.canResendRecording) return
         if (!settings.hasToken()) return
         if (snapshot.recordingStatus != RecordingStatus.Recording) {
             // Rescue path: as long as a persisted WAV exists we re-run
@@ -1097,11 +1203,16 @@ class MainViewModel internal constructor(
         }
 
         toolbarFeedback.clear()
+        stopFinalizeTypewriter()
+        composition.beginResend(snapshot.transcript, snapshot.transcriptMode)
+        syncCompositionLock()
 
         _state.update {
             it.copy(
                 recordingStatus = RecordingStatus.Transcribing,
-                openCodeSendStatus = OpenCodeSendStatus.Idle,
+                localStopInProgress = snapshot.recordingStatus == RecordingStatus.Recording,
+                openCodeSendStatus = if (it.openCodeSendStatus == OpenCodeSendStatus.Sending)
+                    it.openCodeSendStatus else OpenCodeSendStatus.Idle,
                 lastClipboardStatusKey = null,
             )
         }
@@ -1113,41 +1224,50 @@ class MainViewModel internal constructor(
                     stopRecordingTimer()
                     microphone.stop()
                 } catch (t: Throwable) {
+                    if (!transcriptionAttemptGate.isCurrent(attempt)) return@launch
+                    _state.update { it.copy(localStopInProgress = false) }
                     cancelLiveTranscriptionSession()
+                    if (!transcriptionAttemptGate.isCurrent(attempt)) return@launch
                     presentRecordError("record.error.transcriptionFailed")
                     return@launch
                 }
+                if (!transcriptionAttemptGate.isCurrent(attempt)) return@launch
 
                 if (wav == null || !wav.exists() || wav.length() == 0L) {
+                    _state.update { it.copy(localStopInProgress = false) }
                     wav?.let { runCatching { it.delete() } }
                     cancelLiveTranscriptionSession()
+                    if (!transcriptionAttemptGate.isCurrent(attempt)) return@launch
                     presentRecordError("record.error.transcriptionFailed")
                     return@launch
                 }
 
                 lastRecordingFile = wav
                 lastRecordingStrategy = activeRecordingStrategy
-                _state.update { it.copy(hasRecordingFile = true) }
+                composition.audioPersisted()
+                _state.update { it.copy(hasRecordingFile = true, localStopInProgress = false) }
+                if (isAppStopped) {
+                    handleAppStopped()
+                    return@launch
+                }
                 drainAudioSender()
+                if (!transcriptionAttemptGate.isCurrent(attempt)) return@launch
                 cancelLiveTranscriptionSession()
             } else {
                 cancelLiveTranscriptionSession()
             }
 
+            if (!transcriptionAttemptGate.isCurrent(attempt)) return@launch
             discardPreservedLiveAudio()
             val bulk = finishTranscriptionFromLastRecording(
                 presentErrorOnFailure = true,
                 attempt = attempt,
             )
-            if (bulk != null && transcriptionAttemptGate.isCurrent(attempt)) {
-                _state.update {
-                    it.copy(
-                        transcript = bulk,
-                        transcriptHistory = it.transcriptHistory.add(bulk),
-                        recordingStatus = RecordingStatus.Ready,
-                    )
-                }
-                copyTranscript()
+            if (!bulk.isNullOrBlank() && transcriptionAttemptGate.isCurrent(attempt)) {
+                completeStopTranscriptionSuccess(bulk, attempt)
+            } else if (transcriptionAttemptGate.isCurrent(attempt)) {
+                if (bulk != null) presentRecordError("record.error.transcriptionFailed")
+                else settleTranscript()
             }
         }
     }
@@ -1159,13 +1279,11 @@ class MainViewModel internal constructor(
     private fun handleStreamEvent(event: VoiceFlowEvent) {
         when (event) {
             is VoiceFlowEvent.PartialTranscript -> {
-                if (_state.value.recordingStatus == RecordingStatus.Recording &&
-                    activeRecordingStrategy != VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE
-                ) return
+                // Finalize snapshots use their attempt-owned channel, never this writer.
+                if (_state.value.recordingStatus != RecordingStatus.Recording ||
+                    activeRecordingStrategy != VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE) return
                 if (!userEditedTranscriptDuringStream) {
-                    _state.update { current ->
-                        current.copy(transcript = applyStreamedTranscript(current.transcript, event.text))
-                    }
+                    applyChunk(event.text)
                 }
             }
 
@@ -1220,17 +1338,6 @@ class MainViewModel internal constructor(
         }
     }
 
-    private fun updateTranscriptDuringFinalize(partial: String) {
-        // Route the delta through the non-conflating typewriter channel so Compose
-        // sees every snapshot in order. trySend always succeeds on an UNLIMITED
-        // channel; if no pipeline is active (defensive), fall back to a direct
-        // state write so a snapshot is never silently dropped.
-        val channel = finalizeTranscriptChannel
-        if (channel == null || channel.trySend(partial).isSuccess.not()) {
-            _state.update { it.copy(transcript = partial) }
-        }
-    }
-
     /**
      * Start a fresh stop->finalize typewriter pipeline: tear down any prior one,
      * open a new non-conflating UNLIMITED channel (a CONFLATED channel would drop
@@ -1239,19 +1346,17 @@ class MainViewModel internal constructor(
      * [applyStreamedTranscript]. Each `stop` calls this so every session begins
      * with a clean pipeline.
      */
-    private fun startFinalizeTypewriter() {
+    private fun startFinalizeTypewriter(attempt: Long): Channel<String> {
         teardownFinalizeTypewriter()
         val channel = Channel<String>(Channel.UNLIMITED)
         finalizeTranscriptChannel = channel
         finalizeTypewriterJob = viewModelScope.launch(Dispatchers.Main) {
             for (snapshot in channel) {
-                _state.update { current ->
-                    val next = applyStreamedTranscript(current.transcript, snapshot)
-                    if (next == current.transcript) current else current.copy(transcript = next)
-                }
+                if (transcriptionAttemptGate.isCurrent(attempt)) applyChunk(snapshot)
                 delay(FINALIZE_TYPEWRITER_FRAME_MS)
             }
         }
+        return channel
     }
 
     /**
@@ -1261,10 +1366,11 @@ class MainViewModel internal constructor(
      * no pipeline is active.
      */
     private suspend fun drainFinalizeTypewriter() {
+        val job = finalizeTypewriterJob
         finalizeTranscriptChannel?.close()
         finalizeTranscriptChannel = null
-        finalizeTypewriterJob?.join()
         finalizeTypewriterJob = null
+        job?.join()
     }
 
     /** Defensive teardown: cancel the consumer and drop the channel immediately. */
@@ -1281,8 +1387,13 @@ class MainViewModel internal constructor(
 
     private fun startLiveEventConsumer(session: VoiceFlowSession) {
         eventJob?.cancel()
+        val generation = ++liveSessionGeneration
         eventJob = viewModelScope.launch {
-            session.events.collect { event -> handleStreamEvent(event) }
+            session.events.collect { event ->
+                if (generation == liveSessionGeneration && this@MainViewModel.session === session) {
+                    handleStreamEvent(event)
+                }
+            }
         }
     }
 
@@ -1302,12 +1413,15 @@ class MainViewModel internal constructor(
     }
 
     private suspend fun cancelLiveTranscriptionSession() {
+        val generation = ++liveSessionGeneration
+        val previousSession = session
+        session = null
         stopAudioSender()
         stopStreamHeartbeat()
         eventJob?.cancel()
         eventJob = null
-        session?.let { runCatching { it.cancel() } }
-        session = null
+        previousSession?.let { runCatching { it.cancel() } }
+        if (generation != liveSessionGeneration) return
         _state.update {
             it.copy(
                 streamConnectionPhase = VoiceFlowConnectionPhase.Disconnected,
@@ -1324,6 +1438,7 @@ class MainViewModel internal constructor(
         activeSession: VoiceFlowSession,
         sender: OrderedAudioSender,
     ) {
+        if (session !== activeSession) return
         if (!liveAudioDeliveryFailed.compareAndSet(false, true)) return
         sender.cancel()
         viewModelScope.launch {
@@ -1332,12 +1447,18 @@ class MainViewModel internal constructor(
     }
 
     private suspend fun preserveLiveSessionAfterDeliveryFailure(activeSession: VoiceFlowSession) {
+        if (session !== activeSession) return
+        val generation = ++liveSessionGeneration
+        session = null
         stopStreamHeartbeat()
-        val preserved = runCatching { activeSession.abortPreservingAudio() }.getOrNull()
-        if (preserved != null) preservedLiveAudio = preserved
-        if (session === activeSession) session = null
         eventJob?.cancel()
         eventJob = null
+        val preserved = runCatching { activeSession.abortPreservingAudio() }.getOrNull()
+        if (generation != liveSessionGeneration) {
+            preserved?.let(voiceFlowClient::discardPreservedAudio)
+            return
+        }
+        if (preserved != null) preservedLiveAudio = preserved
         _state.update {
             it.copy(
                 streamConnectionPhase = VoiceFlowConnectionPhase.Disconnected,
@@ -1446,12 +1567,34 @@ class MainViewModel internal constructor(
 
     // region Transcript clipboard + history (port of AppState+TranscriptHistory.swift)
 
+    /** Call on Main only; IO callbacks are marshalled through viewModelScope. */
+    private fun applyChunk(chunk: String) {
+        if (!composition.inFlight || chunk.isEmpty()) return
+        val composed = composition.compose(chunk)
+        _state.update { current ->
+            val next = applyStreamedTranscript(current.transcript, composed)
+            if (next == current.transcript) current else current.copy(transcript = next)
+        }
+    }
+
+    private fun syncCompositionLock() {
+        _state.update { it.copy(chunkInFlight = composition.inFlight, chunkLocked = composition.locksEditor) }
+    }
+
+    private fun settleTranscript() {
+        val text = composition.settle(_state.value.transcript)
+        _state.update { it.copy(transcript = text, chunkInFlight = false, chunkLocked = false) }
+    }
+
     /**
      * User edits to the editable transcript field. Sets the
      * `userEditedTranscriptDuringStream` flag (port of the iOS field) so live
      * stream deltas don't clobber a hand-edit, then writes the new text.
      */
     fun onTranscriptEdited(value: String) {
+        if (_state.value.chunkLocked || _state.value.recordingStatus == RecordingStatus.RequestingPermission) return
+        if (value == _state.value.transcript) return
+        composition.invalidateBoundary()
         userEditedTranscriptDuringStream = true
         _state.update { it.copy(transcript = value) }
     }
@@ -1487,6 +1630,7 @@ class MainViewModel internal constructor(
             toolbarFeedback.show("record.clear.empty")
             return
         }
+        composition.invalidateBoundary()
         _state.update {
             it.copy(
                 transcriptHistory = it.transcriptHistory.add(it.transcript),
@@ -1506,6 +1650,7 @@ class MainViewModel internal constructor(
             TranscriptHistory.NavigationResult(snapshot.transcriptHistory, snapshot.transcriptHistory.currentEntry)
         else snapshot.transcriptHistory.navigatePrevious()
         val text = result.text ?: return
+        composition.invalidateBoundary()
         _state.update {
             it.copy(
                 transcriptHistory = result.history,
@@ -1521,6 +1666,7 @@ class MainViewModel internal constructor(
         if (!_state.value.canNavigateNextTranscript) return
         val result = _state.value.transcriptHistory.navigateNext()
         val text = result.text ?: return
+        composition.invalidateBoundary()
         _state.update {
             it.copy(
                 transcriptHistory = result.history,
@@ -1585,6 +1731,7 @@ class MainViewModel internal constructor(
      * on its own — it is consumed state cleared by [dismissRecordError].
      */
     private fun presentRecordError(key: String) {
+        settleTranscript()
         _recordErrorKey.value = key
         _state.update { it.copy(recordingStatus = RecordingStatus.Idle) }
         stopRecordingTimer()

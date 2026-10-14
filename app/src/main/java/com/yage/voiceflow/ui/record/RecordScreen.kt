@@ -17,6 +17,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
+import androidx.compose.material.icons.automirrored.outlined.Undo
+import androidx.compose.material.icons.automirrored.outlined.Redo
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -26,6 +28,7 @@ import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -42,9 +45,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import androidx.compose.ui.text.style.TextAlign
@@ -56,6 +64,7 @@ import com.yage.voiceflow.i18n.stringRes
 import com.yage.voiceflow.i18n.stringResByKey
 import com.yage.voiceflow.model.OpenCodeSendStatus
 import com.yage.voiceflow.model.RecordingStatus
+import com.yage.voiceflow.model.TranscriptMode
 import com.yage.voiceflow.ui.components.CapsuleButton
 import com.yage.voiceflow.ui.components.CapsuleButtonRole
 import com.yage.voiceflow.ui.components.GhostIconButton
@@ -72,7 +81,7 @@ import com.yage.voiceflowkit.VoiceFlowConnectionPhase
  *  timer header (monospaced MM:SS) + [StatusText]
  *  → [WaveformView]
  *  → editable transcript field with a centered placeholder when empty
- *  → persistent clear/copy toolbar
+ *  → persistent mode/clear/copy toolbar
  *  → primary [CapsuleButton] Record ↔ Stop
  *  → secondary controls row: previous-history chevron + overflow menu
  *    (Send to OpenCode / Save Recording / Resend Recording) + next chevron.
@@ -173,6 +182,7 @@ fun RecordScreen(
                     BasicTextField(
                         value = state.transcript,
                         onValueChange = viewModel::onTranscriptEdited,
+                        readOnly = state.chunkLocked || state.recordingStatus == RecordingStatus.RequestingPermission,
                         textStyle = DesignTokens.Typography.body.copy(color = DesignTokens.Palette.textPrimary),
                         cursorBrush = SolidColor(DesignTokens.Palette.accent),
                         modifier = Modifier.fillMaxWidth(),
@@ -192,7 +202,8 @@ fun RecordScreen(
                 }
             }
 
-            TranscriptToolbar(state, viewModel::clearTranscriptToHistory, viewModel::copyTranscriptFromToolbar)
+            TranscriptToolbar(state, viewModel::toggleTranscriptMode,
+                viewModel::clearTranscriptToHistory, viewModel::copyTranscriptFromToolbar)
 
             Spacer(Modifier.height(DesignTokens.Spacing.l))
 
@@ -218,12 +229,27 @@ fun RecordScreen(
     }
 }
 
+private val appendTextIcon = ImageVector.Builder("AppendText", 24.dp, 24.dp, 24f, 24f).apply {
+    path(fill = SolidColor(Color.Black)) {
+        moveTo(3f, 4f); lineTo(21f, 4f); lineTo(21f, 6f); lineTo(3f, 6f); close()
+        moveTo(3f, 9f); lineTo(17f, 9f); lineTo(17f, 11f); lineTo(3f, 11f); close()
+        moveTo(3f, 14f); lineTo(12f, 14f); lineTo(12f, 16f); lineTo(3f, 16f); close()
+        moveTo(17f, 13f); lineTo(19f, 13f); lineTo(19f, 16f); lineTo(22f, 16f)
+        lineTo(22f, 18f); lineTo(19f, 18f); lineTo(19f, 21f); lineTo(17f, 21f)
+        lineTo(17f, 18f); lineTo(14f, 18f); lineTo(14f, 16f); lineTo(17f, 16f); close()
+    }
+}.build()
+
 @Composable
 internal fun TranscriptToolbar(
     state: UiState,
+    onMode: () -> Unit,
     onClear: () -> Unit,
     onCopy: () -> Boolean,
 ) {
+    val isAppend = state.transcriptMode == TranscriptMode.Append
+    val modeName = stringRes(if (isAppend) R.string.record_transcriptMode_append else R.string.record_transcriptMode_replace)
+    val switchHint = stringRes(if (isAppend) R.string.record_transcriptMode_switchReplace else R.string.record_transcriptMode_switchAppend)
     var copied by remember { mutableStateOf(false) }
     var copyTick by remember { mutableIntStateOf(0) }
     LaunchedEffect(copyTick) {
@@ -237,6 +263,20 @@ internal fun TranscriptToolbar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Spacer(Modifier.weight(1f))
+        IconButton(
+            onClick = onMode,
+            enabled = state.canChangeTranscriptMode,
+            modifier = Modifier.size(48.dp).testTag("record.transcriptModeButton")
+                .semantics { stateDescription = modeName }
+                .alpha(if (state.canChangeTranscriptMode) 1f else 0.6f),
+        ) {
+            Icon(
+                if (isAppend) appendTextIcon else Icons.Outlined.SwapHoriz,
+                stringRes(R.string.record_transcriptMode_title) + if (state.canChangeTranscriptMode) ": $switchHint" else "",
+                tint = if (!state.canChangeTranscriptMode) DesignTokens.Palette.textTertiary
+                    else if (isAppend) DesignTokens.Palette.accent else DesignTokens.Palette.textSecondary,
+            )
+        }
         IconButton(onClick = onClear, enabled = state.canClearTranscript,
             modifier = Modifier.size(48.dp).testTag("record.clearTranscriptButton")) {
             Icon(Icons.Outlined.DeleteOutline, stringRes(R.string.record_clear_title),
@@ -264,9 +304,9 @@ private fun SecondaryControls(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         GhostIconButton(
-            icon = Icons.AutoMirrored.Outlined.ArrowBack,
+            icon = if (state.transcriptMode == TranscriptMode.Append) Icons.AutoMirrored.Outlined.Undo else Icons.AutoMirrored.Outlined.ArrowBack,
             isEnabled = state.canNavigatePreviousTranscript,
-            contentDescription = stringRes(R.string.record_history),
+            contentDescription = stringRes(if (state.transcriptMode == TranscriptMode.Append) R.string.record_undo else R.string.record_history),
             onClick = { viewModel.navigatePreviousTranscript() },
         )
 
@@ -314,9 +354,9 @@ private fun SecondaryControls(
         }
 
         GhostIconButton(
-            icon = Icons.AutoMirrored.Outlined.ArrowForward,
+            icon = if (state.transcriptMode == TranscriptMode.Append) Icons.AutoMirrored.Outlined.Redo else Icons.AutoMirrored.Outlined.ArrowForward,
             isEnabled = state.canNavigateNextTranscript,
-            contentDescription = stringRes(R.string.record_history),
+            contentDescription = stringRes(if (state.transcriptMode == TranscriptMode.Append) R.string.record_redo else R.string.record_history),
             onClick = { viewModel.navigateNextTranscript() },
         )
     }

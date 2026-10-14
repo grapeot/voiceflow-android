@@ -2,6 +2,16 @@
 
 ## Changelog
 
+### 2026-10-13（第 2 批：Replace / Append）
+
+- 工具条新增会话级模式按钮，默认 Replace；Append accent 文字追加图标，模式位于清空/复制左侧，反馈复用既有固定状态区。Append 下历史按钮使用 Undo/Redo 语义。自定义动作未纳入本批。
+- Start 捕获模式并冻结 Append 基底；录音、finalize channel、bulk fallback 统一合成当前 chunk。历史和自动复制提交整篇文档，保留第 1 批 Sending 与显式复制修复。
+- Resend 只替换可确认属于当前音频的尾段；用户编辑/历史/清空后边界失效则追加。失败重发恢复原文及边界，保存失败的新录音不冒用旧音频边界；取消及后台结束解除编辑锁。
+- 每次 finalize 使用自己持有的 channel 和 attempt，bulk 回调回到 Main 后核验 attempt，旧 live consumer 按 session generation 拒绝晚到事件。保存与重发仍是救援入口，不因转写中状态关闭。
+- 后台清理捕获本次 attempt、任务、session 和音频发送器，关键挂起点后重新确认 ownership；过期清理只能释放旧资源，不能取消或结算新 attempt。启动/重发错误路径也在取消返回后重新检查 ownership。Replace 和 Append 的 Resend 均保存原文/边界并回滚失败结果，普通录音失败的 partial 保留规则不变。
+- 本地停止/WAV 登记阶段增加短暂入口门控；登记后立即恢复 Save/Resend，不等网络清理。后台事件不取消进行中的本地 stop，防止重复 stop 返回 null 丢失新 WAV。mock 按真实契约修正，并覆盖首次录音、旧文件隔离及各停止路径的异常/空结果。
+- 验证：严格离线 App 70 项、Kit 105 项单测通过，2 项 live 测试跳过；两模块 debug assemble、app lint 通过，lint 为 0 errors、80 warnings、2 hints。完整命令见 `docs/test.md`。未运行 live、connected tests 或真机部署。
+
 ### 2026-10-13（第 1 批：基础转写工具条）
 
 - 文本下沿常驻清空、复制；本批不展示尚未实现的模式或动作入口。两秒反馈复用固定高度状态组件，录音/转写/发送优先，离开页面清除提示。
