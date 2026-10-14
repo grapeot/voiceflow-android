@@ -2,6 +2,15 @@
 
 ## Changelog
 
+### 2026-10-13（第 3 批：Polish / 自定义动作）
+
+- 工具条左侧新增常驻动作名与 wand，运行时原位显示进度/取消，右侧模式/清空/复制位置不变。反馈继续使用既有固定高度状态区。
+- 空动作在忙碌检查之后直接返回提示，不读 token 或发请求；非空动作才验证配置/token。设置保存动作名、指令与两个固定模型，中英文默认齐全。
+- app 层 OkHttp/JSON 客户端只接受完整非空文本，拒绝截断/tool-only，错误仅暴露固定分类。请求身份、原文快照和可取消 Job 保证取消/晚到结果不能改文档。
+- 文本数组逐项检查 object/type/text 的实际类型，坏项使整份响应失败；不做字符串强转或部分提交。默认 HTTP 关闭连接重试且 body 标记 one-shot，阻止 OkHttp 4.12 的 503 Retry-After 自动重放，保留 60 秒超时和 Call.cancel。
+- 成功保存结果与原文历史并自动复制，失败/取消不改正文和历史；动作运行期间锁定实际 VM 变更入口，Copy 和已有音频 Save 继续可用。保留前两批 Sending、复制到期、localStopInProgress 及资源所有权规则。
+- 验证：离线 App 93 项（含本批新增 23 项）、Kit 105 项通过，2 项 live 跳过；debug assemble 与 lint 通过（0 errors、96 warnings、2 hints）。坏数组在 VM 中不提交，503→200 仅发一次请求且返回 Server 分类。使用合成输入及本地 HTTP fixture，没有运行 live/connected 测试或部署。
+
 ### 2026-10-13（第 2 批：Replace / Append）
 
 - 工具条新增会话级模式按钮，默认 Replace；Append accent 文字追加图标，模式位于清空/复制左侧，反馈复用既有固定状态区。Append 下历史按钮使用 Undo/Redo 语义。自定义动作未纳入本批。

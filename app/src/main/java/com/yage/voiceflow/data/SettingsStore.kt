@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.yage.voiceflow.model.AppLanguage
+import com.yage.voiceflow.model.CustomActionConfig
 import com.yage.voiceflow.service.OpenCodeClient
 import com.yage.voiceflowkit.VoiceFlowConfig
 import com.yage.voiceflowkit.VoiceFlowRecordingStrategy
@@ -147,6 +148,23 @@ class SettingsStore internal constructor(
         }
 
     // --- Config assembly ---
+
+    var customActionConfig: CustomActionConfig
+        get() {
+            val chinese = language == AppLanguage.SimplifiedChinese ||
+                (language == AppLanguage.System && java.util.Locale.getDefault().language == "zh")
+            val defaults = CustomActionConfig.default(chinese)
+            return CustomActionConfig(
+                plain.getString("action_name", null) ?: defaults.name,
+                plain.getString("action_instructions", null) ?: defaults.instructions,
+                plain.getString("action_model", null) ?: defaults.model,
+            )
+        }
+        set(value) {
+            plain.edit().putString("action_name", value.name)
+                .putString("action_instructions", value.instructions)
+                .putString("action_model", value.model).apply()
+        }
 
     /** Parse the raw terms string into a trimmed, non-empty list. */
     private fun parsedTerms(): List<String> =

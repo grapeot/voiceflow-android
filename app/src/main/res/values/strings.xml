@@ -134,4 +134,25 @@
     <string name="record_transcriptMode_appendSelected">Mode: Append</string>
     <string name="record_undo">Undo</string>
     <string name="record_redo">Redo</string>
+    <string name="record_customAction_defaultName">Polish</string>
+    <string name="record_customAction_cancel">Cancel</string>
+    <string name="record_customAction_cancelled">Action cancelled</string>
+    <string name="record_customAction_empty">Nothing to process</string>
+    <string name="record_customAction_running">%1$s…</string>
+    <string name="record_customAction_error_notConfigured">Set an action name, instructions and model in Settings.</string>
+    <string name="record_customAction_error_missingToken">Save your AI Builder token in Settings.</string>
+    <string name="record_customAction_error_network">Connection failed. Tap the action to retry.</string>
+    <string name="record_customAction_error_unauthorized">Token rejected. Check your token in Settings.</string>
+    <string name="record_customAction_error_forbidden">This token cannot access the service.</string>
+    <string name="record_customAction_error_rateLimited">Too many requests. Try again shortly.</string>
+    <string name="record_customAction_error_serverError">Service unavailable. Try again shortly.</string>
+    <string name="record_customAction_error_requestFailed">Request failed. Tap the action to retry.</string>
+    <string name="record_customAction_error_invalidResponse">Unexpected response. Original text kept.</string>
+    <string name="record_customAction_error_emptyResult">No text returned. Original text kept.</string>
+    <string name="record_customAction_error_truncated">Incomplete result. Original text kept.</string>
+    <string name="record_customAction_error_generic">Action failed. Tap the action to retry.</string>
+    <string name="settings_customAction_title">Custom action</string>
+    <string name="settings_customAction_name">Action name</string>
+    <string name="settings_customAction_instructions">Instructions</string>
+    <string name="settings_customAction_model">Model</string>
 </resources>
