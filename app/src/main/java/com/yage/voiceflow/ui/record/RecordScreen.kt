@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
@@ -27,6 +28,7 @@ import androidx.compose.material.icons.outlined.SaveAlt
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.AutoFixHigh
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material3.IconButton
@@ -34,6 +36,8 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.DisposableEffect
@@ -56,6 +60,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yage.voiceflow.MainViewModel
 import com.yage.voiceflow.R
@@ -65,6 +70,7 @@ import com.yage.voiceflow.i18n.stringResByKey
 import com.yage.voiceflow.model.OpenCodeSendStatus
 import com.yage.voiceflow.model.RecordingStatus
 import com.yage.voiceflow.model.TranscriptMode
+import com.yage.voiceflow.model.CustomActionState
 import com.yage.voiceflow.ui.components.CapsuleButton
 import com.yage.voiceflow.ui.components.CapsuleButtonRole
 import com.yage.voiceflow.ui.components.GhostIconButton
@@ -81,7 +87,7 @@ import com.yage.voiceflowkit.VoiceFlowConnectionPhase
  *  timer header (monospaced MM:SS) + [StatusText]
  *  → [WaveformView]
  *  → editable transcript field with a centered placeholder when empty
- *  → persistent mode/clear/copy toolbar
+ *  → persistent custom-action/mode/clear/copy toolbar
  *  → primary [CapsuleButton] Record ↔ Stop
  *  → secondary controls row: previous-history chevron + overflow menu
  *    (Send to OpenCode / Save Recording / Resend Recording) + next chevron.
@@ -182,7 +188,8 @@ fun RecordScreen(
                     BasicTextField(
                         value = state.transcript,
                         onValueChange = viewModel::onTranscriptEdited,
-                        readOnly = state.chunkLocked || state.recordingStatus == RecordingStatus.RequestingPermission,
+                        readOnly = state.customActionRunning || state.chunkLocked ||
+                            state.recordingStatus == RecordingStatus.RequestingPermission,
                         textStyle = DesignTokens.Typography.body.copy(color = DesignTokens.Palette.textPrimary),
                         cursorBrush = SolidColor(DesignTokens.Palette.accent),
                         modifier = Modifier.fillMaxWidth(),
@@ -202,7 +209,7 @@ fun RecordScreen(
                 }
             }
 
-            TranscriptToolbar(state, viewModel::toggleTranscriptMode,
+            TranscriptToolbar(state, viewModel::runOrCancelCustomAction, viewModel::toggleTranscriptMode,
                 viewModel::clearTranscriptToHistory, viewModel::copyTranscriptFromToolbar)
 
             Spacer(Modifier.height(DesignTokens.Spacing.l))
@@ -243,10 +250,14 @@ private val appendTextIcon = ImageVector.Builder("AppendText", 24.dp, 24.dp, 24f
 @Composable
 internal fun TranscriptToolbar(
     state: UiState,
+    onAction: () -> Unit,
     onMode: () -> Unit,
     onClear: () -> Unit,
     onCopy: () -> Boolean,
 ) {
+    val actionRunning = state.customActionRunning
+    val actionEnabled = actionRunning || state.canRunCustomAction
+    val actionName = state.customActionConfig.name.trim().ifEmpty { stringRes(R.string.record_customAction_defaultName) }
     val isAppend = state.transcriptMode == TranscriptMode.Append
     val modeName = stringRes(if (isAppend) R.string.record_transcriptMode_append else R.string.record_transcriptMode_replace)
     val switchHint = stringRes(if (isAppend) R.string.record_transcriptMode_switchReplace else R.string.record_transcriptMode_switchAppend)
@@ -262,7 +273,29 @@ internal fun TranscriptToolbar(
         modifier = Modifier.fillMaxWidth().padding(horizontal = DesignTokens.Spacing.xl).testTag("record.transcriptToolbar"),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Spacer(Modifier.weight(1f))
+        TextButton(
+            onClick = onAction,
+            enabled = actionEnabled,
+            modifier = Modifier.weight(1f).height(48.dp).testTag("record.customActionButton")
+                .alpha(if (actionEnabled) 1f else 0.6f),
+        ) {
+            if (actionRunning) {
+                CircularProgressIndicator(Modifier.size(18.dp), color = DesignTokens.Palette.textSecondary, strokeWidth = 2.dp)
+            } else {
+                Icon(
+                    if (state.customActionState is CustomActionState.Failed) Icons.Outlined.Warning else Icons.Outlined.AutoFixHigh,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = DesignTokens.Palette.textSecondary,
+                )
+            }
+            Spacer(Modifier.width(4.dp))
+            Text(
+                if (actionRunning) stringRes(R.string.record_customAction_cancel) else actionName,
+                modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                style = DesignTokens.Typography.caption, color = DesignTokens.Palette.textSecondary,
+            )
+        }
         IconButton(
             onClick = onMode,
             enabled = state.canChangeTranscriptMode,
@@ -398,6 +431,8 @@ private fun statusText(state: UiState): String {
     val key = recordStatusKey(state)
     return if (key == "record.save.statusLine" && state.lastSavedRecording != null) {
         stringResByKey(key, state.lastSavedRecording.fileName)
+    } else if (key == "record.customAction.running" && state.customActionState is CustomActionState.Running) {
+        stringResByKey(key, state.customActionState.name)
     } else stringResByKey(key)
 }
 
@@ -406,7 +441,9 @@ internal fun recordStatusKey(state: UiState): String {
     if (state.recordingStatus != RecordingStatus.Idle && state.recordingStatus != RecordingStatus.Ready) {
         return state.streamStatusCaptionKey ?: state.recordingStatus.statusKey
     }
+    if (state.customActionRunning) return "record.customAction.running"
     recordStatusOverrideKey(state)?.let { return it }
+    (state.customActionState as? CustomActionState.Failed)?.let { return it.reason.key }
     if (state.openCodeSendStatus != OpenCodeSendStatus.Idle) {
         return state.openCodeSendStatus.localizedKey
     }
@@ -416,6 +453,7 @@ internal fun recordStatusKey(state: UiState): String {
 
 /** Only quiescent states accept transient toolbar feedback. */
 internal fun recordStatusOverrideKey(state: UiState): String? {
+    if (state.customActionRunning) return null
     if (state.recordingStatus != RecordingStatus.Idle && state.recordingStatus != RecordingStatus.Ready) return null
     if (state.openCodeSendStatus == OpenCodeSendStatus.Sending) return null
     return state.toolbarFeedbackKey

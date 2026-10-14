@@ -50,6 +50,7 @@ import com.yage.voiceflow.R
 import com.yage.voiceflow.i18n.stringRes
 import com.yage.voiceflow.i18n.stringResByKey
 import com.yage.voiceflow.model.AppLanguage
+import com.yage.voiceflow.model.CustomActionConfig
 import com.yage.voiceflow.model.ConnectionTestStatus
 import com.yage.voiceflow.ui.theme.DesignTokens
 import com.yage.voiceflowkit.VoiceFlowConfig
@@ -157,7 +158,7 @@ fun SettingsScreen(
                             viewModel.clearAIBuilderToken()
                             tokenInput = ""
                         },
-                        enabled = state.hasToken,
+                        enabled = state.hasToken && !state.customActionRunning,
                     ) {
                         Text(
                             stringRes(R.string.settings_apiToken_clear),
@@ -181,6 +182,35 @@ fun SettingsScreen(
                     style = DesignTokens.Typography.captionSub,
                     color = DesignTokens.Palette.textTertiary,
                 )
+            }
+        }
+
+        item {
+            SettingsSection(title = stringRes(R.string.settings_customAction_title)) {
+                val config = state.customActionConfig
+                OutlinedTextField(
+                    value = config.name,
+                    onValueChange = { viewModel.updateCustomAction(config.copy(name = it)) },
+                    label = { Text(stringRes(R.string.settings_customAction_name)) },
+                    singleLine = true, modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = config.instructions,
+                    onValueChange = { viewModel.updateCustomAction(config.copy(instructions = it)) },
+                    label = { Text(stringRes(R.string.settings_customAction_instructions)) },
+                    minLines = 3, modifier = Modifier.fillMaxWidth(),
+                )
+                Text(stringRes(R.string.settings_customAction_model), style = DesignTokens.Typography.caption)
+                CustomActionConfig.models.forEach { (id, title) ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { viewModel.updateCustomAction(config.copy(model = id)) },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = config.model == id,
+                            onClick = { viewModel.updateCustomAction(config.copy(model = id)) })
+                        Text(title, color = DesignTokens.Palette.textPrimary)
+                    }
+                }
             }
         }
 

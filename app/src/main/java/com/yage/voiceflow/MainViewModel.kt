@@ -11,6 +11,8 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.CreationExtras
 import com.yage.voiceflow.data.SettingsStore
 import com.yage.voiceflow.model.AppLanguage
+import com.yage.voiceflow.model.CustomActionConfig
+import com.yage.voiceflow.model.CustomActionState
 import com.yage.voiceflow.model.ConnectionTestStatus
 import com.yage.voiceflow.model.OpenCodeSendStatus
 import com.yage.voiceflow.model.RecordingStatus
@@ -23,6 +25,7 @@ import com.yage.voiceflow.model.TranscriptHistory
 import com.yage.voiceflow.model.TranscriptComposition
 import com.yage.voiceflow.model.TranscriptMode
 import com.yage.voiceflow.service.OpenCodeClient
+import com.yage.voiceflow.service.CustomActionClient
 import com.yage.voiceflow.service.OpenCodeClientError
 import com.yage.voiceflowkit.VoiceFlowAudioMetering
 import com.yage.voiceflowkit.VoiceFlowClient
@@ -174,6 +177,8 @@ data class UiState(
     val chunkLocked: Boolean = false,
     /** Local stop/WAV registration only; never held while waiting for the network. */
     val localStopInProgress: Boolean = false,
+    val customActionConfig: CustomActionConfig = CustomActionConfig.default(false),
+    val customActionState: CustomActionState = CustomActionState.Idle,
 
     // --- Two-layer stream captions ---
     val persistentStreamCaptionKey: String? = null,
@@ -228,15 +233,17 @@ data class UiState(
 
     // --- Derived gating (ports of the AppState computed `can*` properties) ---
 
+    val customActionRunning: Boolean get() = customActionState is CustomActionState.Running
+
     val canCopyTranscript: Boolean
         get() = transcript.trim().isNotEmpty()
 
     val canStartRecording: Boolean
-        get() = !localStopInProgress && !chunkInFlight &&
+        get() = !customActionRunning && !localStopInProgress && !chunkInFlight &&
             (recordingStatus == RecordingStatus.Idle || recordingStatus == RecordingStatus.Ready)
 
     val canStopRecording: Boolean
-        get() = !localStopInProgress && recordingStatus == RecordingStatus.Recording
+        get() = !customActionRunning && !localStopInProgress && recordingStatus == RecordingStatus.Recording
 
     /** Navigation (and save/resend) are only allowed while not mid-capture. */
     val canNavigateTranscriptHistory: Boolean
@@ -244,6 +251,9 @@ data class UiState(
 
     val canClearTranscript: Boolean get() = canNavigateTranscriptHistory
     val canChangeTranscriptMode: Boolean get() = canNavigateTranscriptHistory
+    val canRunCustomAction: Boolean
+        get() = canNavigateTranscriptHistory &&
+            (!canCopyTranscript || (hasToken && customActionConfig.isConfigured))
 
     val canNavigatePreviousTranscript: Boolean
         get() = canNavigateTranscriptHistory &&
@@ -285,7 +295,7 @@ data class UiState(
      * [RecordingStatus.Transcribing].
      */
     val canResendRecording: Boolean
-        get() = !localStopInProgress && hasToken &&
+        get() = !customActionRunning && !localStopInProgress && hasToken &&
             (recordingStatus == RecordingStatus.Recording || hasRecordingFile)
 
     /** Flat filename for the save-confirmation dialog (avoids dotted access). */
@@ -320,6 +330,7 @@ class MainViewModel internal constructor(
     private val voiceFlowClient: VoiceFlowClient = VoiceFlowClient(settings.buildConfig()),
     private val microphone: VoiceFlowMicrophone = VoiceFlowMicrophone(application),
     private val openCodeClient: OpenCodeClient = OpenCodeClient(),
+    private val customActionClient: CustomActionClient = CustomActionClient(),
 ) : AndroidViewModel(application) {
     private val composition = TranscriptComposition()
 
@@ -328,6 +339,28 @@ class MainViewModel internal constructor(
     private val toolbarFeedback = ToolbarFeedback(viewModelScope) { key ->
         _state.update { it.copy(toolbarFeedbackKey = key) }
     }
+    private val customAction = CustomActionRunner(
+        scope = viewModelScope,
+        token = settings::getToken,
+        currentText = { _state.value.transcript },
+        transform = { text, config, token ->
+            customActionClient.transform(text, config.instructions, config.model, aiBuilderEndpoint, token)
+        },
+        stateChanged = { value -> _state.update { it.copy(customActionState = value) } },
+        feedback = toolbarFeedback::show,
+        commit = { source, result ->
+            composition.invalidateBoundary()
+            _state.update {
+                it.copy(
+                    transcript = result,
+                    transcriptHistory = it.transcriptHistory.addTransform(source, result),
+                    openCodeSendStatus = if (it.openCodeSendStatus == OpenCodeSendStatus.Sending)
+                        it.openCodeSendStatus else OpenCodeSendStatus.Idle,
+                )
+            }
+            copyTranscript()
+        },
+    )
 
     /**
      * One-shot record error key, SEPARATE from [UiState] (bug #3). The dialog is
@@ -443,6 +476,7 @@ class MainViewModel internal constructor(
                 terms = settings.termsRaw,
                 recordingStrategy = settings.recordingStrategy,
                 language = settings.language,
+                customActionConfig = settings.customActionConfig,
             )
         }
     }
@@ -470,6 +504,7 @@ class MainViewModel internal constructor(
     }
 
     fun clearAIBuilderToken() {
+        if (_state.value.customActionRunning) return
         if (!settings.clearToken()) {
             _state.update {
                 it.copy(connectionStatus = ConnectionTestStatus.Failed("settings.connection.clearFailed", null))
@@ -533,7 +568,24 @@ class MainViewModel internal constructor(
 
     fun updateLanguage(language: AppLanguage) {
         settings.language = language
-        _state.update { it.copy(language = language) }
+        _state.update { it.copy(language = language, customActionConfig = settings.customActionConfig) }
+    }
+
+    fun updateCustomAction(config: CustomActionConfig) {
+        settings.customActionConfig = config
+        _state.update { it.copy(customActionConfig = config) }
+    }
+
+    fun runOrCancelCustomAction() {
+        if (customAction.running) {
+            customAction.cancel()
+            toolbarFeedback.show("record.customAction.cancelled")
+            return
+        }
+        val snapshot = _state.value
+        if (!snapshot.canNavigateTranscriptHistory) return
+        if (snapshot.transcript.isNotBlank()) toolbarFeedback.clear()
+        customAction.run(snapshot.transcript, snapshot.customActionConfig)
     }
 
     fun clearToolbarFeedback() = toolbarFeedback.clear()
@@ -1592,6 +1644,7 @@ class MainViewModel internal constructor(
      * stream deltas don't clobber a hand-edit, then writes the new text.
      */
     fun onTranscriptEdited(value: String) {
+        if (_state.value.customActionRunning) return
         if (_state.value.chunkLocked || _state.value.recordingStatus == RecordingStatus.RequestingPermission) return
         if (value == _state.value.transcript) return
         composition.invalidateBoundary()
@@ -1636,6 +1689,7 @@ class MainViewModel internal constructor(
                 transcriptHistory = it.transcriptHistory.add(it.transcript),
                 transcript = "",
                 lastClipboardStatusKey = null,
+                customActionState = CustomActionState.Idle,
                 openCodeSendStatus = if (it.openCodeSendStatus == OpenCodeSendStatus.Sending)
                     it.openCodeSendStatus else OpenCodeSendStatus.Idle,
             )
@@ -1797,6 +1851,7 @@ class MainViewModel internal constructor(
     // endregion
 
     override fun onCleared() {
+        customAction.cancel()
         toolbarFeedback.clear()
         super.onCleared()
         stopStreamHeartbeat()

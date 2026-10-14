@@ -49,10 +49,16 @@ export PATH="$JAVA_HOME/bin:$PATH"
 - `ToolbarViewModelTest` — 真实 VM 的清空/历史恢复、空清空 no-op、空复制实际调用 Android 剪贴板、复制失败与忙碌门控；挂起的合成发送覆盖 Sending→clear→restore/前后导航、菜单与重复发送门控；显式复制成功/失败/空文本到期及离页后的最终状态选择，自动复制持久状态保持。全部依赖使用合成 mock，不外发
 - `TranscriptCompositionTest` — Replace/Append 基底、Unicode/换行、累计 snapshot、尾段重发、失败回滚、用户编辑与未持久化音频的边界失效
 - `TranscriptModeViewModelTest` — 模式会话默认值/两秒反馈、Start 权限期间锁定、三策略整篇历史与剪贴板、逐帧 finalize、bulk fallback、重发/后台/无信号/失败恢复、旧 session 事件及晚到响应不能改新内容。麦克风、服务和响应均为合成 mock
+- `CustomActionViewModelTest` — 真实 VM 的空动作零 token/请求、忙碌优先、配置与 token 门控、结果/原文历史与自动复制、动作期间所有变更入口锁定、取消和晚到响应、配置快照、剪贴板失败及 Sending 保持
+- `CustomActionRunnerTest` — 防御性原文冲突、取消后的非协作响应、固定错误分类和空输入顺序
+- `CustomActionClientTest` — 本地 MockWebServer 验证请求格式、完整文本响应、HTTP 分类隐私、真实 Call 取消；不调用业务服务
+- `CustomActionSettingsTest` — 模型白名单、中英默认与用户配置持久化，不读 token
 
 模式回归还使用 Deferred 控制后台 microphone.stop、audio drain、session.cancel 的返回时机，验证旧清理不能覆盖新的 Append 救援。Replace 覆盖 partial 后异常/空白和连续救援，验证原文、历史、剪贴板及后续切换 Append 的尾段边界。
 
 麦克风 mock 遵循真实的一次性 stop 契约：开始录音后第一次 stop 返回 WAV，重复 stop 返回 null。专门测试第一次 stop 挂起时前台重复操作被门控、无旧 WAV 的首次录音正确登记、旧 WAV 不被误用、WAV 登记后网络仍挂起时恢复救援，以及正常/后台/救援三条停止路径的异常和空结果释放门控。
+
+自定义动作还覆盖损坏文本数组（例如合法片段中夹数字、对象或数字型 text），并经过真实解析器和 VM 验证正文/历史/剪贴板均不提交。生产默认客户端接受 `503 + Retry-After: 0` 后必须返回固定 Server 错误；即使随后排队一个成功响应，MockWebServer 也只能收到一次请求。仅关闭 `retryOnConnectionFailure` 不足以阻止 OkHttp 4.12 的该 follow-up，因此请求体同时标记为 one-shot。
 
 ## Live backend 集成测试（opt-in）
 
@@ -94,6 +100,8 @@ cp .env.example .env   # 填入 AI_BUILDER_TOKEN
 - 连点模式后确认 Replace 灰色 swap、Append accent 文字追加；历史按钮随模式切换为 Undo/Redo
 - Append 两次录音形成整篇文档；重发只改最后录音，失败重发恢复原文；编辑/历史/清空后重发安全追加
 - 录音/转写中不能改变模式，有非空文档基底时不能编辑，失败/后台结束后恢复可用；现有 Save/Resend 救援入口保持可用
+- 四个工具条按钮在空页常驻；长动作名不能挤掉模式/清空/复制。没有 token 的空动作仅提示，动作运行时进度和取消原位显示
+- 自定义动作成功后历史能恢复原文；失败/取消不改正文/历史/剪贴板。运行中 Copy/已有音频 Save 可用，其余正文变更入口锁定
 
 工具条改动的离线验证：
 

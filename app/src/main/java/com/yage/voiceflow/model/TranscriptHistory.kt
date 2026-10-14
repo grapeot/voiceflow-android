@@ -28,6 +28,8 @@ data class TranscriptHistory(
 ) {
     val currentEntry: String? get() = entries.getOrNull(currentIndex)?.text
 
+    fun addTransform(source: String, result: String): TranscriptHistory = add(source).add(result)
+
     val hasNext: Boolean
         get() = currentIndex > 0
 
