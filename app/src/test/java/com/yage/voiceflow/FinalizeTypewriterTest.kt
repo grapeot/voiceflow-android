@@ -124,7 +124,7 @@ class FinalizeTypewriterTest {
         assertEquals("hello", transcript)
         assertEquals(emptyList<String>(), writes)
 
-        val copied = copyTranscriptIfPresent(transcript) { text ->
+        val copied = copyTranscriptExplicitly(transcript) { text ->
             writes.add(text)
             true
         }
@@ -134,15 +134,11 @@ class FinalizeTypewriterTest {
     }
 
     @Test
-    fun `blank transcript skips clipboard writes`() {
+    fun `explicit empty and whitespace copies really replace clipboard content`() {
         val writes = mutableListOf<String>()
-
-        val copied = copyTranscriptIfPresent("  \n") { text ->
-            writes.add(text)
-            true
+        for (text in listOf("", "  \n")) {
+            assertEquals(true, copyTranscriptExplicitly(text) { writes.add(it); true })
         }
-
-        assertEquals(null, copied)
-        assertEquals(emptyList<String>(), writes)
+        assertEquals(listOf("", "  \n"), writes)
     }
 }

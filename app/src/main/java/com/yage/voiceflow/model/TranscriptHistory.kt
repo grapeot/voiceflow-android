@@ -26,6 +26,8 @@ data class TranscriptHistory(
     val currentIndex: Int = 0,
     val limit: Int = 5,
 ) {
+    val currentEntry: String? get() = entries.getOrNull(currentIndex)?.text
+
     val hasNext: Boolean
         get() = currentIndex > 0
 

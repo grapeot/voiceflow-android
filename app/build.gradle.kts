@@ -3,8 +3,11 @@
 // testInstrumentationRunnerArguments so the instrumented test can read them at
 // runtime. When .env is absent, the args are empty and the live test self-skips
 // (assumeTrue), keeping the default test run green and offline.
+// Credentials may only enter an explicitly opted-in instrumentation build.
+// Ordinary assemble/unit/lint must not even read the developer's .env.
+val includeLiveTestCredentials = providers.gradleProperty("voiceflowLiveTestCredentials").orNull == "true"
 val envFile = rootProject.file(".env")
-val env: Map<String, String> = if (envFile.exists()) {
+val env: Map<String, String> = if (includeLiveTestCredentials && envFile.exists()) {
     envFile.readLines()
         .filter { it.isNotBlank() && !it.startsWith("#") }
         .mapNotNull { line ->

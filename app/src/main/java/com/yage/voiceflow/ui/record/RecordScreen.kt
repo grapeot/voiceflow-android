@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
@@ -23,14 +24,19 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.SaveAlt
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Warning
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
@@ -38,6 +44,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import androidx.compose.ui.text.style.TextAlign
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yage.voiceflow.MainViewModel
@@ -63,9 +72,10 @@ import com.yage.voiceflowkit.VoiceFlowConnectionPhase
  *  timer header (monospaced MM:SS) + [StatusText]
  *  → [WaveformView]
  *  → editable transcript field with a centered placeholder when empty
+ *  → persistent clear/copy toolbar
  *  → primary [CapsuleButton] Record ↔ Stop
  *  → secondary controls row: previous-history chevron + overflow menu
- *    (Copy / Send to OpenCode / Save Recording / Resend Recording) + next chevron.
+ *    (Send to OpenCode / Save Recording / Resend Recording) + next chevron.
  *
  * All state derivations (`waveformMode`, `waveformColor`, the status line, the
  * status role, the OpenCode menu label/icon) replicate the iOS `RecordView`
@@ -87,6 +97,7 @@ fun RecordScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val transcriptScrollState = rememberScrollState()
+    DisposableEffect(viewModel) { onDispose { viewModel.clearToolbarFeedback() } }
 
     LaunchedEffect(state.transcript.length, state.recordingStatus) {
         if (state.recordingStatus == RecordingStatus.Transcribing && state.transcript.isNotEmpty()) {
@@ -122,6 +133,7 @@ fun RecordScreen(
                 text = statusText(state),
                 role = statusTextRole(state),
                 modifier = Modifier.padding(horizontal = DesignTokens.Spacing.xl),
+                minLines = 2,
             )
 
             Spacer(Modifier.height(DesignTokens.Spacing.l))
@@ -180,6 +192,8 @@ fun RecordScreen(
                 }
             }
 
+            TranscriptToolbar(state, viewModel::clearTranscriptToHistory, viewModel::copyTranscriptFromToolbar)
+
             Spacer(Modifier.height(DesignTokens.Spacing.l))
 
             // --- Primary action ---
@@ -200,6 +214,40 @@ fun RecordScreen(
                 viewModel = viewModel,
                 state = state,
             )
+        }
+    }
+}
+
+@Composable
+internal fun TranscriptToolbar(
+    state: UiState,
+    onClear: () -> Unit,
+    onCopy: () -> Boolean,
+) {
+    var copied by remember { mutableStateOf(false) }
+    var copyTick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(copyTick) {
+        if (copyTick > 0) {
+            delay(1_200)
+            copied = false
+        }
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = DesignTokens.Spacing.xl).testTag("record.transcriptToolbar"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Spacer(Modifier.weight(1f))
+        IconButton(onClick = onClear, enabled = state.canClearTranscript,
+            modifier = Modifier.size(48.dp).testTag("record.clearTranscriptButton")) {
+            Icon(Icons.Outlined.DeleteOutline, stringRes(R.string.record_clear_title),
+                tint = if (state.canClearTranscript) DesignTokens.Palette.textSecondary else DesignTokens.Palette.textTertiary)
+        }
+        IconButton(onClick = {
+            copied = onCopy()
+            copyTick++
+        }, modifier = Modifier.size(48.dp).testTag("record.copyButton")) {
+            Icon(if (copied) Icons.Outlined.Check else Icons.Outlined.ContentCopy,
+                stringRes(R.string.record_copy), tint = DesignTokens.Palette.textSecondary)
         }
     }
 }
@@ -234,21 +282,11 @@ private fun SecondaryControls(
                 onDismissRequest = { menuExpanded = false },
             ) {
                 DropdownMenuItem(
-                    text = { Text(stringRes(R.string.record_copy)) },
-                    leadingIcon = { Icon(Icons.Outlined.ContentCopy, contentDescription = null) },
-                    enabled = state.canCopyTranscript,
-                    onClick = {
-                        menuExpanded = false
-                        viewModel.copyTranscript()
-                    },
-                )
-                DropdownMenuItem(
                     text = { Text(stringRes(openCodeMenuLabelRes(state.openCodeSendStatus))) },
                     leadingIcon = {
                         Icon(openCodeMenuIcon(state.openCodeSendStatus), contentDescription = null)
                     },
-                    enabled = state.canSendToOpenCode &&
-                        state.openCodeSendStatus != OpenCodeSendStatus.Sending,
+                    enabled = state.canSendToOpenCode,
                     onClick = {
                         menuExpanded = false
                         viewModel.sendTranscriptToOpenCode()
@@ -309,22 +347,38 @@ private fun waveformColor(
 
 /**
  * Resolves the status line text, replicating the iOS `statusTextKey` priority
- * chain: OpenCode send status → saved-recording status line → stream caption →
- * clipboard status → recording-status default. All but the save line are dotted
+ * chain: active work → temporary toolbar feedback → previous completion/save
+ * status → stream caption → clipboard status → recording-status default.
+ * All but the save line are dotted
  * iOS keys resolved through [stringResByKey]; the save line carries the saved
  * file name as a format arg.
  */
 @Composable
 private fun statusText(state: UiState): String {
+    val key = recordStatusKey(state)
+    return if (key == "record.save.statusLine" && state.lastSavedRecording != null) {
+        stringResByKey(key, state.lastSavedRecording.fileName)
+    } else stringResByKey(key)
+}
+
+/** The final status selection, shared with regression tests (including fallback). */
+internal fun recordStatusKey(state: UiState): String {
+    if (state.recordingStatus != RecordingStatus.Idle && state.recordingStatus != RecordingStatus.Ready) {
+        return state.streamStatusCaptionKey ?: state.recordingStatus.statusKey
+    }
+    recordStatusOverrideKey(state)?.let { return it }
     if (state.openCodeSendStatus != OpenCodeSendStatus.Idle) {
-        return stringResByKey(state.openCodeSendStatus.localizedKey)
+        return state.openCodeSendStatus.localizedKey
     }
-    state.lastSavedRecording?.let { saved ->
-        return stringResByKey("record.save.statusLine", saved.fileName)
-    }
-    state.streamStatusCaptionKey?.let { return stringResByKey(it) }
-    state.lastClipboardStatusKey?.let { return stringResByKey(it) }
-    return stringResByKey(state.recordingStatus.statusKey)
+    if (state.lastSavedRecording != null) return "record.save.statusLine"
+    return state.streamStatusCaptionKey ?: state.lastClipboardStatusKey ?: state.recordingStatus.statusKey
+}
+
+/** Only quiescent states accept transient toolbar feedback. */
+internal fun recordStatusOverrideKey(state: UiState): String? {
+    if (state.recordingStatus != RecordingStatus.Idle && state.recordingStatus != RecordingStatus.Ready) return null
+    if (state.openCodeSendStatus == OpenCodeSendStatus.Sending) return null
+    return state.toolbarFeedbackKey
 }
 
 private fun statusTextRole(state: UiState): StatusTextRole = when (state.recordingStatus) {

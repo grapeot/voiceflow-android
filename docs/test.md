@@ -45,6 +45,8 @@ export PATH="$JAVA_HOME/bin:$PATH"
 - `FinalizeTypewriterTest` — finalize 打字机：append-only reconciliation（后端重新分段时非前缀走 replace、相同内容跳过 recomposition）、non-conflating channel 保证每个 snapshot 按序到达不被 StateFlow conflate 吞掉
 - `RescueGatingTest` — 保存 / 重发录音的救援门控
 - `StrategySettingsTest` — strategy 选择与持久化；ordered audio sender 非阻塞（capture 回调不等网络 backpressure）、overflow 拒绝、1s drain timeout 取消卡死的网络发送
+- `ToolbarFeedbackTest` — 两秒到期、连续相同提示重新计时、活跃状态优先
+- `ToolbarViewModelTest` — 真实 VM 的清空/历史恢复、空清空 no-op、空复制实际调用 Android 剪贴板、复制失败与忙碌门控；挂起的合成发送覆盖 Sending→clear→restore/前后导航、菜单与重复发送门控；显式复制成功/失败/空文本到期及离页后的最终状态选择，自动复制持久状态保持。全部依赖使用合成 mock，不外发
 
 ## Live backend 集成测试（opt-in）
 
@@ -61,11 +63,12 @@ cp .env.example .env   # 填入 AI_BUILDER_TOKEN
 
 `OpenCodeLiveSendTranscriptTest`：通过 `OpenCodeClient.sendTranscript` 真实路径发送转写，并读回 `GET {base}/session/{id}/message` 验证 session 里确实落了 `[user]` 消息——只有 204 不算通过（那是 broken agent 的静默失败模式，公开 client 现在在 `sendTranscript` 内部做 read-back 验证）。
 
-- 凭证来自根目录 `.env`（gitignored），由 `app/build.gradle.kts` 注入 instrumentation runner args（`OPENCODE_BASE_URL` / `OPENCODE_USERNAME` / `OPENCODE_PASSWORD`）；缺 `OPENCODE_BASE_URL` 时 `assumeTrue` 自动 skip，默认跑法永远绿且不出网。
+- 凭证来自根目录 `.env`（gitignored），仅在显式传入 `-PvoiceflowLiveTestCredentials=true` 时由 `app/build.gradle.kts` 注入 instrumentation runner args（`OPENCODE_BASE_URL` / `OPENCODE_USERNAME` / `OPENCODE_PASSWORD`）。默认不读取 `.env`，参数为空，live 测试跳过。带凭证的测试 APK 不可分发；普通 app APK 不注入这些测试参数。
 - 模拟器访问 host localhost 走 `10.0.2.2`，测试会把 base URL 里的 `localhost` / `127.0.0.1` 重写过去。
 
 ```bash
 ./gradlew connectedDebugAndroidTest \
+  -PvoiceflowLiveTestCredentials=true \
   -Pandroid.testInstrumentationRunnerArguments.class=com.yage.voiceflow.service.OpenCodeLiveSendTranscriptTest
 ```
 
@@ -79,6 +82,20 @@ cp .env.example .env   # 填入 AI_BUILDER_TOKEN
 - 历史 chevron、⋯ 菜单的保存/重发
 - 中英文双语切换
 - 模拟器截图逐项确认视觉元素（Pixelate：状态字、像素方块波形、Tab 图标、app icon），与 iOS 一致
+- 本批工具条只显示清空/复制，在空页/非空/忙碌态常驻；中英、深浅色、窄屏和大字体下不挤掉图标
+- 空复制覆盖旧剪贴板；空清空连续点击不改变历史；清空后左箭头恢复刚归档文本
+- 连点复制/清空，状态区两秒反馈不移动按钮；录音、转写和发送优先
+
+工具条改动的离线验证：
+
+```sh
+unset VOICEFLOW_LIVE_WS
+./gradlew :voiceflowkit:testDebugUnitTest :app:testDebugUnitTest -PvoiceflowLiveTestCredentials=false
+./gradlew :voiceflowkit:assembleDebug :app:assembleDebug -PvoiceflowLiveTestCredentials=false
+./gradlew :app:lintDebug -PvoiceflowLiveTestCredentials=false
+```
+
+不要用全量 connected tests 代替离线验证。需要设备 UI 自动化时只定向执行合成用例，真实 API 与 OpenCode 外发测试需另行授权。
 
 ## 文档与仓库验收
 
