@@ -206,6 +206,10 @@ Opening this URL launches the app and starts recording immediately. See
 
 ### Install (download)
 
+The reference app is version **0.5.0**. This is an app-only update: the
+VoiceFlowKit library remains **0.4.0**, so existing JitPack integrations do not
+need to change their dependency version.
+
 Prebuilt APKs are attached to each [GitHub release](https://github.com/grapeot/voiceflow-android/releases).
 Download `voiceflow-<version>.apk`, open it on the device, and allow installing
 from this source. The release APK is signed with the Android debug key, so it

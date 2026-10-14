@@ -2,6 +2,12 @@
 
 ## Changelog
 
+### 2026-10-13（Android App 0.5.0 发布准备）
+
+- App versionName 升至 0.5.0，versionCode 升至 6。自 0.4.0 tag 以来，VoiceFlowKit 模块无代码变化；其版本及推荐 JitPack 依赖继续保持 0.4.0。
+- 本次 App 更新包含常驻工具条、两秒状态反馈、Replace/Append、Polish 与自定义动作设置，以及对应的重发、取消和失败恢复保护。
+- 发布沿用 `scripts/release.sh 0.5.0`，构建可安装 APK 并附到 GitHub Release；0.5.0 是本次 App 发布 tag，不要求现有库使用者升级。
+
 ### 2026-10-13（第 3 批：Polish / 自定义动作）
 
 - 工具条左侧新增常驻动作名与 wand，运行时原位显示进度/取消，右侧模式/清空/复制位置不变。反馈继续使用既有固定高度状态区。
