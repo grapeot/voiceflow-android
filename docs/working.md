@@ -2,6 +2,14 @@
 
 ## Changelog
 
+### 2026-10-13（第 1 批：基础转写工具条）
+
+- 文本下沿常驻清空、复制；本批不展示尚未实现的模式或动作入口。两秒反馈复用固定高度状态组件，录音/转写/发送优先，离开页面清除提示。
+- 空复制明确写空字符串；空清空不改历史/游标。清空后左箭头恢复当前历史项。保留现有转写和 Save/Resend 路径。
+- 清空和历史前后导航保留 Sending，菜单与 VM 发送入口在原请求完成前均拒绝重复发送。显式工具条复制只设置两秒临时结果并清除旧复制状态；自动复制继续保留持久结果。新增挂起合成发送、最终状态选择与到期/离页回归。
+- `.env` 测试凭据注入改为显式 `-PvoiceflowLiveTestCredentials=true`，默认构建不读取该文件。只为需要的 live 仪器测试打开开关，带凭据的测试 APK 不分发。
+- 验证：严格 `--offline` 的 App 31 项与 Kit 105 项单测通过（2 项 live 测试跳过），两模块 debug assemble、app lint 通过。未运行 connected tests 或安装应用。第 2 批实现完整 Replace/Append，第 3 批实现 Polish/自定义动作；各批分别测试与独立 review 后合并，全部合并后再统一部署。
+
 ### 2026-09-29 (文档审阅：补 test.md + 目录索引)
 
 - 新增 `docs/test.md`：对齐 iOS 仓库的测试策略与验收命令——默认 JVM 单测（`testDebugUnitTest`，无网络、无设备）、opt-in live backend 集成（`scripts/test_live_integration.sh`，消耗 API 额度）、opt-in OpenCode live e2e（真机/模拟器 + 本地 OpenCode，`.env` 缺失自动 skip）。

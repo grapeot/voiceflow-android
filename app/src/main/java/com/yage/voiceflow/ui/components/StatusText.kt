@@ -24,6 +24,7 @@ fun StatusText(
     text: String,
     role: StatusTextRole,
     modifier: Modifier = Modifier,
+    minLines: Int = 1,
 ) {
     val color: Color = when (role) {
         StatusTextRole.Neutral -> DesignTokens.Palette.textSecondary
@@ -39,6 +40,7 @@ fun StatusText(
         color = color,
         textAlign = TextAlign.Center,
         maxLines = 2,
+        minLines = minLines,
         overflow = TextOverflow.Ellipsis,
         modifier = modifier.fillMaxWidth(),
     )

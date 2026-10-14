@@ -121,4 +121,8 @@
     <string name="settings_transcription_prompt_placeholder">e.g. Transcribe every word in ALL CAPS. Example: THIS IS A TEST.</string>
     <string name="settings_transcription_terms">Terms</string>
     <string name="settings_transcription_terms_placeholder">Comma-separated terms to preserve verbatim, e.g. Kubernetes, gRPC, Anthropic.</string>
+    <string name="record_clear_title">Clear transcript</string>
+    <string name="record_clear_cleared">Transcript cleared</string>
+    <string name="record_clear_empty">Nothing to clear</string>
+    <string name="record_clipboard_emptyCopied">Empty text copied</string>
 </resources>

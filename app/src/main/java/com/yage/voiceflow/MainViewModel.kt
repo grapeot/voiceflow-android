@@ -74,11 +74,10 @@ fun applyStreamedTranscript(current: String, incoming: String): String {
 }
 
 /**
- * Framework-free clipboard gate for transcript copy actions. Streaming deltas
- * update UI state only; callers invoke this once from a completed/fallback path.
+ * Explicit clipboard writes include empty strings. Streaming deltas update UI
+ * state only; automatic copy is invoked once from a completed/fallback path.
  */
-internal fun copyTranscriptIfPresent(text: String, write: (String) -> Boolean): Boolean? {
-    if (text.trim().isEmpty()) return null
+internal fun copyTranscriptExplicitly(text: String, write: (String) -> Boolean): Boolean {
     return write(text)
 }
 
@@ -167,6 +166,7 @@ data class UiState(
     // --- Transcript + history ---
     val transcript: String = "",
     val transcriptHistory: TranscriptHistory = TranscriptHistory(),
+    val toolbarFeedbackKey: String? = null,
 
     // --- Two-layer stream captions ---
     val persistentStreamCaptionKey: String? = null,
@@ -234,8 +234,11 @@ data class UiState(
     val canNavigateTranscriptHistory: Boolean
         get() = recordingStatus == RecordingStatus.Idle || recordingStatus == RecordingStatus.Ready
 
+    val canClearTranscript: Boolean get() = canNavigateTranscriptHistory
+
     val canNavigatePreviousTranscript: Boolean
-        get() = canNavigateTranscriptHistory && transcriptHistory.hasPrevious
+        get() = canNavigateTranscriptHistory &&
+            (if (transcript.isBlank()) transcriptHistory.currentEntry != null else transcriptHistory.hasPrevious)
 
     val canNavigateNextTranscript: Boolean
         get() = canNavigateTranscriptHistory && transcriptHistory.hasNext
@@ -248,7 +251,8 @@ data class UiState(
     val canSendToOpenCode: Boolean
         get() = canCopyTranscript &&
             isOpenCodeConfigured &&
-            openCodeConnectionStatus == ConnectionTestStatus.Success
+            openCodeConnectionStatus == ConnectionTestStatus.Success &&
+            openCodeSendStatus != OpenCodeSendStatus.Sending
 
     /**
      * Save is a rescue action: allowed whenever a persisted capture exists on
@@ -300,15 +304,19 @@ data class UiState(
  * suspend callback via [setMicPermissionRequester]; [startRecording] invokes it
  * (mirroring iOS `audioRecorder.requestPermission()`).
  */
-class MainViewModel(application: Application) : AndroidViewModel(application) {
-
-    private val settings = SettingsStore.create(application)
-    private val voiceFlowClient = VoiceFlowClient(settings.buildConfig())
-    private val microphone = VoiceFlowMicrophone(application)
-    private val openCodeClient = OpenCodeClient()
+class MainViewModel internal constructor(
+    application: Application,
+    private val settings: SettingsStore = SettingsStore.create(application),
+    private val voiceFlowClient: VoiceFlowClient = VoiceFlowClient(settings.buildConfig()),
+    private val microphone: VoiceFlowMicrophone = VoiceFlowMicrophone(application),
+    private val openCodeClient: OpenCodeClient = OpenCodeClient(),
+) : AndroidViewModel(application) {
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
+    private val toolbarFeedback = ToolbarFeedback(viewModelScope) { key ->
+        _state.update { it.copy(toolbarFeedbackKey = key) }
+    }
 
     /**
      * One-shot record error key, SEPARATE from [UiState] (bug #3). The dialog is
@@ -516,6 +524,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(language = language) }
     }
 
+    fun clearToolbarFeedback() = toolbarFeedback.clear()
+
     // endregion
 
     // region OpenCode settings (port of AppState+OpenCode.swift)
@@ -626,6 +636,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun sendTranscriptToOpenCode() {
         val snapshot = _state.value
+        if (snapshot.openCodeSendStatus == OpenCodeSendStatus.Sending) return
         if (!snapshot.canCopyTranscript) return
         val password = settings.getOpenCodePassword()
         if (!snapshot.isOpenCodeConfigured || password.isEmpty()) {
@@ -676,6 +687,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun startRecording() {
         if (!_state.value.canStartRecording) return
+        toolbarFeedback.clear()
         viewModelScope.launch { startRecordingInternal() }
     }
 
@@ -1084,6 +1096,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (file == null || !file.exists()) return
         }
 
+        toolbarFeedback.clear()
+
         _state.update {
             it.copy(
                 recordingStatus = RecordingStatus.Transcribing,
@@ -1442,23 +1456,62 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(transcript = value) }
     }
 
-    fun copyTranscript() {
+    /** Automatic transcription copy retains the existing persistent result status. */
+    fun copyTranscript(): Boolean = copyTranscript(transientFeedback = false)
+
+    /** Explicit copy replaces any old clipboard status with a two-second result. */
+    fun copyTranscriptFromToolbar(): Boolean = copyTranscript(transientFeedback = true)
+
+    private fun copyTranscript(transientFeedback: Boolean): Boolean {
         val text = _state.value.transcript
-        val ok = copyTranscriptIfPresent(text, ::writeToClipboard) ?: return
+        val ok = copyTranscriptExplicitly(text, ::writeToClipboard)
+        if (!transientFeedback) toolbarFeedback.clear()
         _state.update {
-            it.copy(lastClipboardStatusKey = if (ok) "record.clipboard.copied" else "record.clipboard.failed")
+            it.copy(lastClipboardStatusKey = if (transientFeedback) null
+                else if (ok) "record.clipboard.copied" else "record.clipboard.failed")
         }
+        if (transientFeedback) {
+            toolbarFeedback.show(when {
+                !ok -> "record.clipboard.failed"
+                text.isEmpty() -> "record.clipboard.emptyCopied"
+                else -> "record.clipboard.copied"
+            })
+        }
+        return ok
+    }
+
+    fun clearTranscriptToHistory() {
+        val snapshot = _state.value
+        if (!snapshot.canClearTranscript) return
+        if (snapshot.transcript.isBlank()) {
+            toolbarFeedback.show("record.clear.empty")
+            return
+        }
+        _state.update {
+            it.copy(
+                transcriptHistory = it.transcriptHistory.add(it.transcript),
+                transcript = "",
+                lastClipboardStatusKey = null,
+                openCodeSendStatus = if (it.openCodeSendStatus == OpenCodeSendStatus.Sending)
+                    it.openCodeSendStatus else OpenCodeSendStatus.Idle,
+            )
+        }
+        toolbarFeedback.show("record.clear.cleared")
     }
 
     fun navigatePreviousTranscript() {
         if (!_state.value.canNavigatePreviousTranscript) return
-        val result = _state.value.transcriptHistory.navigatePrevious()
+        val snapshot = _state.value
+        val result = if (snapshot.transcript.isBlank())
+            TranscriptHistory.NavigationResult(snapshot.transcriptHistory, snapshot.transcriptHistory.currentEntry)
+        else snapshot.transcriptHistory.navigatePrevious()
         val text = result.text ?: return
         _state.update {
             it.copy(
                 transcriptHistory = result.history,
                 transcript = text,
-                openCodeSendStatus = OpenCodeSendStatus.Idle,
+                openCodeSendStatus = if (it.openCodeSendStatus == OpenCodeSendStatus.Sending)
+                    it.openCodeSendStatus else OpenCodeSendStatus.Idle,
                 lastClipboardStatusKey = null,
             )
         }
@@ -1472,7 +1525,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             it.copy(
                 transcriptHistory = result.history,
                 transcript = text,
-                openCodeSendStatus = OpenCodeSendStatus.Idle,
+                openCodeSendStatus = if (it.openCodeSendStatus == OpenCodeSendStatus.Sending)
+                    it.openCodeSendStatus else OpenCodeSendStatus.Idle,
                 lastClipboardStatusKey = null,
             )
         }
@@ -1596,6 +1650,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // endregion
 
     override fun onCleared() {
+        toolbarFeedback.clear()
         super.onCleared()
         stopStreamHeartbeat()
         eventJob?.cancel()

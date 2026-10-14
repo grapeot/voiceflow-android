@@ -119,4 +119,8 @@
     <string name="settings_transcription_prompt_placeholder">例如：把每个英文单词转写为全大写。例：THIS IS A TEST.</string>
     <string name="settings_transcription_terms">术语字典</string>
     <string name="settings_transcription_terms_placeholder">用英文逗号分隔需要原样保留的术语，例如 Kubernetes, gRPC, Anthropic。</string>
+    <string name="record_clear_title">清空文本</string>
+    <string name="record_clear_cleared">已清空文本</string>
+    <string name="record_clear_empty">没有可清空的文本</string>
+    <string name="record_clipboard_emptyCopied">已复制空文本到剪贴板</string>
 </resources>
