@@ -2,6 +2,12 @@
 
 ## Changelog
 
+### 2026-10-16（Android App 0.5.1 发布准备）
+
+- App versionName 升至 0.5.1，versionCode 升至 7。VoiceFlowKit 仍为 0.4.0，JitPack 依赖不用改。
+- 本次 App 更新是 Record 编辑态：焦点收起计时器和波形、IME inset、点空白结束编辑、程序化滚动，以及删除手改后停掉实时 partial。
+- 发布沿用 `scripts/release.sh 0.5.1`。0.5.1 是 App 发布 tag，不要求现有库使用者升级。
+
 ### 2026-10-16（Record 编辑态与实时 partial）
 
 - 文本框获得焦点就收起顶部：顶距 48dp 收到 8dp，计时器 56sp 收到 13sp 并继续走秒，状态行与波形间距 24dp 收到 8dp，波形高度和透明度收到 0，波形与文本间距 48dp 收到 8dp。高度是布局高度，不是只改透明度。状态行、短录音警告、文本框、四按钮工具条、Record/Stop、历史行和底栏都留着。多出的高度仍由文本区 `weight(1f)` 吃掉。收和展 300ms ease-in-out，跟焦点一起动，不等键盘动画。

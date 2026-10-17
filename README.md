@@ -206,7 +206,7 @@ Opening this URL launches the app and starts recording immediately. See
 
 ### Install (download)
 
-The reference app is version **0.5.0**. This is an app-only update: the
+The reference app is version **0.5.1**. This is an app-only update: the
 VoiceFlowKit library remains **0.4.0**, so existing JitPack integrations do not
 need to change their dependency version.
 
