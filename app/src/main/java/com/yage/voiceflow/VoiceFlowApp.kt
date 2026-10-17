@@ -1,6 +1,12 @@
 package com.yage.voiceflow
 
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Settings
@@ -19,13 +25,30 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import com.yage.voiceflow.i18n.stringRes
+import com.yage.voiceflow.ui.record.recordContentBottom
 import com.yage.voiceflow.i18n.stringResByKey
 import com.yage.voiceflow.ui.record.RecordScreen
 import com.yage.voiceflow.ui.settings.SettingsScreen
 import com.yage.voiceflow.ui.theme.DesignTokens
 
 private enum class Tab { Record, Settings }
+
+@Composable
+private fun recordContentModifier(innerPadding: PaddingValues): Modifier {
+    val density = LocalDensity.current
+    val layoutDirection = LocalLayoutDirection.current
+    val imeBottom = with(density) { WindowInsets.ime.getBottom(this).toDp() }
+    val bottom = recordContentBottom(innerPadding.calculateBottomPadding(), imeBottom)
+    return Modifier.padding(
+        start = innerPadding.calculateStartPadding(layoutDirection),
+        top = innerPadding.calculateTopPadding(),
+        end = innerPadding.calculateEndPadding(layoutDirection),
+        bottom = bottom,
+    )
+}
 
 /**
  * Root composable. A two-tab Material [NavigationBar] (Record / Settings) over
@@ -60,6 +83,7 @@ fun VoiceFlowApp(viewModel: MainViewModel) {
     val state by viewModel.state.collectAsState()
 
     Scaffold(
+        contentWindowInsets = WindowInsets.systemBars,
         bottomBar = {
             NavigationBar {
                 NavigationBarItem(
@@ -94,7 +118,7 @@ fun VoiceFlowApp(viewModel: MainViewModel) {
             Tab.Record -> RecordScreen(
                 viewModel = viewModel,
                 onShowOpenCodeInfo = { showOpenCodeInfo = true },
-                modifier = contentModifier,
+                modifier = recordContentModifier(innerPadding),
             )
 
             Tab.Settings -> SettingsScreen(

@@ -410,9 +410,6 @@ class MainViewModel internal constructor(
     private var activeRecordingStrategy: VoiceFlowRecordingStrategy =
         VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE
 
-    /** True while the user has hand-edited the transcript mid-stream. */
-    private var userEditedTranscriptDuringStream = false
-
     /** True during finalize teardown; suppresses recovery-failed noise. */
     private var isTranscriptionTeardown = false
 
@@ -891,7 +888,6 @@ class MainViewModel internal constructor(
             }
             transientCaptionJob?.cancel()
             transientCaptionJob = null
-            userEditedTranscriptDuringStream = false
             isTranscriptionTeardown = false
 
             voiceFlowClient.updateConfig(settings.buildConfig())
@@ -1332,11 +1328,10 @@ class MainViewModel internal constructor(
         when (event) {
             is VoiceFlowEvent.PartialTranscript -> {
                 // Finalize snapshots use their attempt-owned channel, never this writer.
+                // 已删除 userEditedTranscriptDuringStream：实时 partial 始终应用。
                 if (_state.value.recordingStatus != RecordingStatus.Recording ||
                     activeRecordingStrategy != VoiceFlowRecordingStrategy.GPT_LIVE_TRANSCRIBE) return
-                if (!userEditedTranscriptDuringStream) {
-                    applyChunk(event.text)
-                }
+                applyChunk(event.text)
             }
 
             is VoiceFlowEvent.PhaseChanged -> {
@@ -1639,16 +1634,15 @@ class MainViewModel internal constructor(
     }
 
     /**
-     * User edits to the editable transcript field. Sets the
-     * `userEditedTranscriptDuringStream` flag (port of the iOS field) so live
-     * stream deltas don't clobber a hand-edit, then writes the new text.
+     * User edits to the transcript field. Writes the text immediately and
+     * invalidates the resend boundary. Does not write history or copy.
+     * Live partials keep applying after a hand edit.
      */
     fun onTranscriptEdited(value: String) {
         if (_state.value.customActionRunning) return
         if (_state.value.chunkLocked || _state.value.recordingStatus == RecordingStatus.RequestingPermission) return
         if (value == _state.value.transcript) return
         composition.invalidateBoundary()
-        userEditedTranscriptDuringStream = true
         _state.update { it.copy(transcript = value) }
     }
 
