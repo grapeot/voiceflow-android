@@ -149,6 +149,21 @@ class TranscriptModeViewModelTest {
         assertEquals("corrected", f.vm.state.value.transcript)
     }
 
+    @Test fun `gpt live partial still overwrites a hand edit during recording`() = runTest(dispatcher) {
+        val f = Fixture()
+        f.vm.startRecording(); runCurrent()
+        f.events.emit(VoiceFlowEvent.PartialTranscript("hello")); runCurrent()
+        f.vm.onTranscriptEdited("user edit")
+        assertEquals("user edit", f.vm.state.value.transcript)
+        val history = f.vm.state.value.transcriptHistory
+        val copies = f.copies.size
+        f.events.emit(VoiceFlowEvent.PartialTranscript("hello world")); runCurrent()
+        assertEquals("hello world", f.vm.state.value.transcript)
+        assertSame(history, f.vm.state.value.transcriptHistory)
+        assertEquals(copies, f.copies.size)
+        f.vm.stopRecording(); runCurrent()
+    }
+
     @Test fun `live and finalize cumulative snapshots never append duplicates and remain frame ordered`() = runTest(dispatcher) {
         val f = Fixture()
         f.appendBase()

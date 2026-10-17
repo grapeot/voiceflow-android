@@ -2,6 +2,15 @@
 
 ## Changelog
 
+### 2026-10-16（Record 编辑态与实时 partial）
+
+- 文本框获得焦点就收起顶部：顶距 48dp 收到 8dp，计时器 56sp 收到 13sp 并继续走秒，状态行与波形间距 24dp 收到 8dp，波形高度和透明度收到 0，波形与文本间距 48dp 收到 8dp。高度是布局高度，不是只改透明度。状态行、短录音警告、文本框、四按钮工具条、Record/Stop、历史行和底栏都留着。多出的高度仍由文本区 `weight(1f)` 吃掉。收和展 300ms ease-in-out，跟焦点一起动，不等键盘动画。
+- 软键盘用 `WindowInsets.ime` 垫 Record 列，底边取 scaffold 底距和 IME inset 的较大值，不把两者相加。Manifest 不设 `windowSoftInputMode`，Scaffold 仍只垫系统栏。inset 为 0 时折叠照常发生。回车换行，不加 Done。
+- 点文本以外的空白结束编辑。点按钮先执行按钮，再结束编辑；用 Final pass 观察点击，不铺全屏 clickable。空页文本区至少铺满视口，点「开始说话。」下方空白会聚焦并进入编辑态。
+- 自动滚动抽成 `transcriptScrollTarget`。旧文本非空且新文本以其为前缀时滚到末尾（打字机、GPT Live partial）；其余程序化替换滚到开头（自定义动作、历史跳转、不是延伸的替换模式最终结果，以及从空文本第一次出现）。用户自己打的字不滚。
+- 已删除 `userEditedTranscriptDuringStream`。GPT Live 录音中的 partial 始终 `applyChunk`。`onTranscriptEdited` 仍立刻写正文并 `invalidateBoundary()`，不写历史、不自动复制。成功结束仍用官方合成结果整篇替换。
+- 验证：`./gradlew :app:testDebugUnitTest :voiceflowkit:testDebugUnitTest`（Android Studio JBR）BUILD SUCCESSFUL。App 100 项、0 失败；Kit 无改动，`testDebugUnitTest` 为 UP-TO-DATE（既有报告 107 项、0 失败）。未跑仪器测试，未安装到设备，因此没有在模拟器上确认键盘是否真的让出底边。
+
 ### 2026-10-13（Android App 0.5.0 发布准备）
 
 - App versionName 升至 0.5.0，versionCode 升至 6。自 0.4.0 tag 以来，VoiceFlowKit 模块无代码变化；其版本及推荐 JitPack 依赖继续保持 0.4.0。

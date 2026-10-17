@@ -1,5 +1,9 @@
 package com.yage.voiceflow.ui.record
 
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -9,11 +13,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -50,14 +56,34 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.focus.FocusManager
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.changedToDownIgnoreConsumed
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -112,19 +138,59 @@ fun RecordScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val transcriptScrollState = rememberScrollState()
+    val focusManager = LocalFocusManager.current
+    val focusRequester = remember { FocusRequester() }
+    val editorBounds = remember { mutableStateOf(Rect.Zero) }
+    val rootCoordinates = remember { mutableStateOf<LayoutCoordinates?>(null) }
+    var isEditing by remember { mutableStateOf(false) }
+    var viewportPx by remember { mutableIntStateOf(0) }
+    var measuredWarningPx by remember { mutableIntStateOf(0) }
+    var previousTranscript by remember { mutableStateOf(state.transcript) }
+    var pendingUserEdit by remember { mutableStateOf<String?>(null) }
     DisposableEffect(viewModel) { onDispose { viewModel.clearToolbarFeedback() } }
 
-    LaunchedEffect(state.transcript.length, state.recordingStatus) {
-        if (state.recordingStatus == RecordingStatus.Transcribing && state.transcript.isNotEmpty()) {
-            withFrameNanos { }
-            transcriptScrollState.scrollTo(transcriptScrollState.maxValue)
+    LaunchedEffect(state.transcript) {
+        val fromUser = pendingUserEdit != null && pendingUserEdit == state.transcript
+        pendingUserEdit = null
+        val action = transcriptScrollTarget(previousTranscript, state.transcript, fromUser)
+        previousTranscript = state.transcript
+        when (action) {
+            TranscriptScrollTarget.End -> {
+                withFrameNanos { }
+                transcriptScrollState.scrollTo(transcriptScrollState.maxValue)
+            }
+            TranscriptScrollTarget.Start -> {
+                withFrameNanos { }
+                transcriptScrollState.scrollTo(0)
+            }
+            TranscriptScrollTarget.None -> Unit
         }
     }
+
+    val topGap by animateDpAsState(compactSpacing(isEditing, DesignTokens.Spacing.xxl), CompactTween, label = "topGap")
+    val statusGap by animateDpAsState(compactSpacing(isEditing, DesignTokens.Spacing.l), CompactTween, label = "statusGap")
+    val transcriptGap by animateDpAsState(compactSpacing(isEditing, DesignTokens.Spacing.xxl), CompactTween, label = "transcriptGap")
+    val waveformHeight by animateDpAsState(if (isEditing) 0.dp else DesignTokens.Sizing.waveformHeight, CompactTween, label = "waveformHeight")
+    val waveformAlpha by animateFloatAsState(if (isEditing) 0f else 1f, CompactFloatTween, label = "waveformAlpha")
+    val timerSize by animateFloatAsState(
+        targetValue = if (isEditing) DesignTokens.Typography.captionSub.fontSize.value else DesignTokens.Typography.timer.fontSize.value,
+        animationSpec = CompactFloatTween,
+        label = "timerSize",
+    )
+    val density = LocalDensity.current
+    val warningPx = if (state.showTranscriptWarning) measuredWarningPx else 0
+    val minField = with(density) { (viewportPx - warningPx).coerceAtLeast(0).toDp() }
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(DesignTokens.Palette.bgPrimary),
+            .background(DesignTokens.Palette.bgPrimary)
+            .onGloballyPositioned { rootCoordinates.value = it }
+            .clearFocusWhenTappedOutsideEditor(
+                focusManager = focusManager,
+                editorBounds = { editorBounds.value },
+                root = { rootCoordinates.value },
+            ),
     ) {
         Column(
             modifier = Modifier
@@ -132,16 +198,13 @@ fun RecordScreen(
                 .padding(bottom = DesignTokens.Spacing.l),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Spacer(Modifier.height(DesignTokens.Spacing.xxl))
+            Spacer(Modifier.height(topGap))
 
-            // --- Timer header + status ---
             Text(
                 text = state.recordingTimerText,
                 color = DesignTokens.Palette.textPrimary,
-                // Pixel hint pulled back: the MM:SS timer returns to the regular
-                // 56sp Thin face. The pixel language now lives only in the
-                // waveform, status caption, tab glyphs and logo.
-                style = DesignTokens.Typography.timer,
+                style = (if (isEditing) DesignTokens.Typography.captionSub else DesignTokens.Typography.timer)
+                    .copy(fontSize = timerSize.sp),
             )
             Spacer(Modifier.height(DesignTokens.Spacing.s))
             StatusText(
@@ -151,25 +214,31 @@ fun RecordScreen(
                 minLines = 2,
             )
 
-            Spacer(Modifier.height(DesignTokens.Spacing.l))
+            Spacer(Modifier.height(statusGap))
 
-            // --- Waveform ---
-            WaveformView(
-                mode = waveformMode(state.recordingStatus),
-                color = waveformColor(state.recordingStatus, state.streamConnectionPhase),
-                level = state.audioLevel,
-                modifier = Modifier.padding(horizontal = DesignTokens.Spacing.xl),
-            )
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = DesignTokens.Spacing.xl)
+                    .height(waveformHeight)
+                    .alpha(waveformAlpha)
+                    .clipToBounds(),
+            ) {
+                WaveformView(
+                    mode = waveformMode(state.recordingStatus),
+                    color = waveformColor(state.recordingStatus, state.streamConnectionPhase),
+                    level = state.audioLevel,
+                )
+            }
 
-            Spacer(Modifier.height(DesignTokens.Spacing.xxl))
+            Spacer(Modifier.height(transcriptGap))
 
-            // --- Editable transcript with centered placeholder ---
             Column(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .padding(horizontal = DesignTokens.Spacing.xl)
-                    .verticalScroll(transcriptScrollState),
+                    .onSizeChanged { viewportPx = it.height }
+                    .verticalScroll(transcriptScrollState)
+                    .padding(horizontal = DesignTokens.Spacing.xl),
             ) {
                 if (state.showTranscriptWarning) {
                     Text(
@@ -177,33 +246,46 @@ fun RecordScreen(
                         color = DesignTokens.Palette.textSecondary,
                         style = DesignTokens.Typography.caption,
                         modifier = Modifier
+                            .onSizeChanged { measuredWarningPx = it.height }
                             .fillMaxWidth()
                             .padding(bottom = DesignTokens.Spacing.s),
                     )
                 }
                 Box(
-                    modifier = Modifier.fillMaxWidth(),
-                    contentAlignment = if (state.transcript.isEmpty()) Alignment.Center else Alignment.TopStart,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = minField)
+                        .onGloballyPositioned { editorBounds.value = it.boundsInWindow() }
+                        .focusOnUnconsumedTap(focusRequester),
                 ) {
                     BasicTextField(
                         value = state.transcript,
-                        onValueChange = viewModel::onTranscriptEdited,
+                        onValueChange = { value ->
+                            if (value != state.transcript) pendingUserEdit = value
+                            viewModel.onTranscriptEdited(value)
+                        },
                         readOnly = state.customActionRunning || state.chunkLocked ||
                             state.recordingStatus == RecordingStatus.RequestingPermission,
                         textStyle = DesignTokens.Typography.body.copy(color = DesignTokens.Palette.textPrimary),
                         cursorBrush = SolidColor(DesignTokens.Palette.accent),
-                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.None),
+                        singleLine = false,
+                        maxLines = Int.MAX_VALUE,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.TopStart)
+                            .focusRequester(focusRequester)
+                            .onFocusChanged { isEditing = it.isFocused },
                     )
                     if (state.transcript.isEmpty()) {
-                        // Centered to stay symmetric with the timer/waveform above;
-                        // a left-aligned placeholder reads as orphaned (matches the
-                        // iOS rationale in RecordView).
                         Text(
                             text = stringRes(R.string.record_transcript_placeholder),
                             color = DesignTokens.Palette.textTertiary,
                             textAlign = TextAlign.Center,
                             style = DesignTokens.Typography.body,
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .fillMaxWidth(),
                         )
                     }
                 }
@@ -482,3 +564,73 @@ private fun openCodeMenuIcon(status: OpenCodeSendStatus) = when (status) {
     is OpenCodeSendStatus.Failed -> Icons.Outlined.Warning
     OpenCodeSendStatus.Idle -> Icons.Outlined.Send
 }
+
+private val CompactEasing = CubicBezierEasing(0.42f, 0f, 0.58f, 1f)
+private val CompactTween = tween<Dp>(durationMillis = 300, easing = CompactEasing)
+private val CompactFloatTween = tween<Float>(durationMillis = 300, easing = CompactEasing)
+
+private fun compactSpacing(editing: Boolean, expanded: Dp): Dp =
+    if (editing) DesignTokens.Spacing.s else expanded
+
+private fun Modifier.clearFocusWhenTappedOutsideEditor(
+    focusManager: FocusManager,
+    editorBounds: () -> Rect,
+    root: () -> LayoutCoordinates?,
+): Modifier = pointerInput(focusManager) {
+    val slop = viewConfiguration.touchSlop
+    awaitPointerEventScope {
+        var origin: Offset? = null
+        var moved = false
+        while (true) {
+            val event = awaitPointerEvent(PointerEventPass.Final)
+            for (change in event.changes) {
+                if (change.changedToDownIgnoreConsumed()) {
+                    origin = change.position
+                    moved = false
+                }
+                val start = origin
+                if (start != null && (change.position - start).getDistance() > slop) moved = true
+                if (change.changedToUpIgnoreConsumed()) {
+                    val startPos = origin
+                    val wasTap = startPos != null && !moved
+                    origin = null
+                    moved = false
+                    if (!wasTap) continue
+                    val coordinates = root() ?: continue
+                    if (!coordinates.isAttached) continue
+                    val bounds = editorBounds()
+                    if (bounds.isEmpty) continue
+                    if (!bounds.contains(coordinates.localToWindow(change.position))) {
+                        focusManager.clearFocus(force = true)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun Modifier.focusOnUnconsumedTap(focusRequester: FocusRequester): Modifier =
+    pointerInput(focusRequester) {
+        val slop = viewConfiguration.touchSlop
+        awaitPointerEventScope {
+            var origin: Offset? = null
+            var moved = false
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Final)
+                for (change in event.changes) {
+                    if (change.changedToDownIgnoreConsumed()) {
+                        origin = change.position
+                        moved = false
+                    }
+                    val start = origin
+                    if (start != null && (change.position - start).getDistance() > slop) moved = true
+                    if (change.changedToUpIgnoreConsumed()) {
+                        val wasTap = origin != null && !moved && !change.isConsumed
+                        origin = null
+                        moved = false
+                        if (wasTap) focusRequester.requestFocus()
+                    }
+                }
+            }
+        }
+    }
